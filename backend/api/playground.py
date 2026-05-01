@@ -1,10 +1,11 @@
 """
-Playground API endpoints - allows authenticated users to simulate client interactions.
-Clients simulate sending messages, and the agent workflow processes them.
-Protected endpoints - only authenticated users can access.
+Playground API — authenticated users simulate multiple independent test clients.
+Each test client gets a unique phone number so Redis conversation contexts are isolated.
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from db.database import get_db
@@ -12,7 +13,11 @@ from models.users import User
 from models.clients import Client
 from models.conversation import Conversation
 from models.messages import Message
-from schemas.playground import PlaygroundMessage, PlaygroundResponse
+from models.lead_conversation import LeadConversation
+from schemas.playground import (
+    PlaygroundMessage, PlaygroundResponse,
+    PlaygroundSession, PlaygroundSessionsResponse,
+)
 from services.agent import handle_message
 from api.deps import get_current_user
 
@@ -20,31 +25,91 @@ router = APIRouter(prefix="/playground", tags=["Playground"])
 log = logging.getLogger(__name__)
 
 
-def _get_or_create_playground_client(user_id: int, client_name: str, db: Session) -> Client:
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _resolve_playground_client(
+    user_id: int,
+    client_id: Optional[int],
+    db: Session,
+) -> Client:
     """
-    Get or create a playground test client for the user.
-    Uses a special naming convention: "playground_test_{index}"
+    Return an existing playground client (when client_id is given) or create a
+    brand-new one.  Every client gets a unique phone so Redis contexts stay isolated.
     """
-    # First, try to find an existing playground test client
-    client = db.query(Client).filter(
+    if client_id is not None:
+        client = db.query(Client).filter(
+            Client.id == client_id,
+            Client.user_id == user_id,
+        ).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Playground client not found.")
+        return client
+
+    # Count existing playground clients so we can assign a sequential label
+    count = db.query(Client).filter(
         Client.user_id == user_id,
-        Client.name.like("playground_test_%")
-    ).first()
+        Client.name.like("playground%"),
+    ).count()
 
-    if not client:
-        # Create a new playground client
-        client_name = client_name or f"Playground Client"
-        client = Client(
-            user_id=user_id,
-            name=f"playground_test_{client_name}",
-            phone_number="+playground0000000000"  # Fake phone for test purposes
-        )
-        db.add(client)
-        db.commit()
-        db.refresh(client)
-        log.info(f"Created playground client {client.id} for user {user_id}")
-
+    seq = count + 1
+    client = Client(
+        user_id=user_id,
+        name=f"playground_client_{seq}",
+        phone_number=f"+pg{user_id:04d}{seq:06d}",
+    )
+    db.add(client)
+    db.commit()
+    db.refresh(client)
+    log.info("Created playground client %s (seq=%s) for user %s", client.id, seq, user_id)
     return client
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/sessions", response_model=PlaygroundSessionsResponse)
+def list_playground_sessions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return all playground test clients for the authenticated user, oldest first."""
+    clients = (
+        db.query(Client)
+        .filter(
+            Client.user_id == current_user.id,
+            Client.name.like("playground%"),
+        )
+        .order_by(Client.created_at.asc())
+        .all()
+    )
+
+    sessions = []
+    for client in clients:
+        conv = (
+            db.query(Conversation)
+            .filter(
+                Conversation.client_id == client.id,
+                Conversation.user_id == current_user.id,
+            )
+            .order_by(Conversation.created_at.desc())
+            .first()
+        )
+        msg_count = 0
+        conv_id   = None
+        if conv:
+            conv_id   = conv.id
+            msg_count = db.query(Message).filter(Message.conversation_id == conv.id).count()
+
+        sessions.append(
+            PlaygroundSession(
+                client_id=client.id,
+                client_name=client.name,
+                conversation_id=conv_id,
+                message_count=msg_count,
+                created_at=client.created_at,
+            )
+        )
+
+    return PlaygroundSessionsResponse(sessions=sessions)
 
 
 @router.post("/message", response_model=PlaygroundResponse)
@@ -54,48 +119,30 @@ def send_playground_message(
     db: Session = Depends(get_db),
 ):
     """
-    Send a message to the playground agent.
-    
-    This endpoint simulates a client sending a message to the authenticated user's agent.
-    The message is processed through the full agent workflow (sanitization, guardrails, LLM).
-    
-    Args:
-    - content: The message content from the simulated client
-    - client_name: Optional name for the test client (default: "Playground Client")
-    
-    Returns:
-    - reply: The agent's response
-    - conversation_id: The conversation ID for tracking
-    - client_id: The test client ID
+    Send a message through the agent pipeline as a specific (or new) test client.
+    Pass client_id to continue an existing test session; omit it to start a fresh one.
     """
     try:
-        # Get or create a playground test client
-        client = _get_or_create_playground_client(
-            current_user.id,
-            payload.client_name or "Playground Client",
-            db
-        )
+        client = _resolve_playground_client(current_user.id, payload.client_id, db)
 
-        # Process the message through the agent
         reply, conversation_id = handle_message(
             user_id=current_user.id,
             client_phone=client.phone_number,
             content=payload.content,
-            db=db
+            db=db,
         )
 
         return PlaygroundResponse(
             reply=reply,
             conversation_id=conversation_id,
-            client_id=client.id
+            client_id=client.id,
         )
 
+    except HTTPException:
+        raise
     except Exception as exc:
-        log.error(f"Error in playground message for user {current_user.id}: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process playground message"
-        )
+        log.error("Playground message error for user %s: %s", current_user.id, exc)
+        raise HTTPException(status_code=500, detail="Failed to process message")
 
 
 @router.get("/conversation/{conversation_id}")
@@ -104,94 +151,59 @@ def get_playground_conversation(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Get the full conversation history for a playground conversation.
-    
-    Returns the conversation details and all messages in chronological order.
-    """
-    try:
-        # Verify the conversation belongs to this user
-        conversation = db.query(Conversation).filter(
-            Conversation.id == conversation_id,
-            Conversation.user_id == current_user.id
-        ).first()
+    """Return a conversation and all its messages."""
+    conv = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id,
+    ).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Conversation not found"
-            )
-
-        # Get all messages for this conversation
-        messages = db.query(Message).filter(
-            Message.conversation_id == conversation_id
-        ).order_by(Message.created_at).all()
-
-        messages_data = [
+    messages = (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at)
+        .all()
+    )
+    return {
+        "conversation_id": conv.id,
+        "summary": conv.conversation_summary,
+        "messages": [
             {
-                "id": msg.id,
-                "sender_type": msg.sender_type,
-                "content": msg.content,
-                "created_at": msg.created_at.isoformat()
+                "id": m.id,
+                "sender_type": m.sender_type,
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
             }
-            for msg in messages
-        ]
-
-        return {
-            "conversation_id": conversation.id,
-            "messages": messages_data,
-            "summary": conversation.conversation_summary
-        }
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        log.error(f"Error fetching conversation {conversation_id} for user {current_user.id}: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch conversation"
-        )
+            for m in messages
+        ],
+    }
 
 
-@router.delete("/conversation/{conversation_id}")
-def delete_playground_conversation(
-    conversation_id: int,
+@router.delete("/session/{client_id}")
+def delete_playground_session(
+    client_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Delete a playground conversation and its messages.
-    Useful for clearing test conversations.
-    """
-    try:
-        # Verify the conversation belongs to this user
-        conversation = db.query(Conversation).filter(
-            Conversation.id == conversation_id,
-            Conversation.user_id == current_user.id
-        ).first()
+    """Delete a test client and all its conversations and messages."""
+    client = db.query(Client).filter(
+        Client.id == client_id,
+        Client.user_id == current_user.id,
+    ).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Playground client not found.")
 
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Conversation not found"
-            )
+    convs = db.query(Conversation).filter(
+        Conversation.client_id == client_id,
+        Conversation.user_id == current_user.id,
+    ).all()
 
-        # Delete all messages for this conversation
-        db.query(Message).filter(
-            Message.conversation_id == conversation_id
-        ).delete()
+    for conv in convs:
+        db.query(Message).filter(Message.conversation_id == conv.id).delete()
+        db.query(LeadConversation).filter(LeadConversation.conversation_id == conv.id).delete()
+        db.delete(conv)
 
-        # Delete the conversation
-        db.delete(conversation)
-        db.commit()
-
-        return {"status": "success", "message": "Conversation deleted"}
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        log.error(f"Error deleting conversation {conversation_id} for user {current_user.id}: {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete conversation"
-        )
+    db.delete(client)
+    db.commit()
+    return {"status": "deleted", "client_id": client_id}

@@ -4,6 +4,7 @@ from api.user import router as user_router
 from api.webhook import router as webhook_router
 from api.dashboard import router as dashboard_router
 from api.playground import router as playground_router
+from api.leads import router as leads_router
 
 app = FastAPI(title="WhatsApp Lead Qualifier")
 
@@ -23,6 +24,7 @@ app.include_router(user_router)
 app.include_router(webhook_router)
 app.include_router(dashboard_router)
 app.include_router(playground_router)
+app.include_router(leads_router)
 
 
 @app.get("/")

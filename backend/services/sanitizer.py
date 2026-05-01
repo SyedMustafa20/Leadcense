@@ -24,7 +24,22 @@ _BLOCK_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"override\s+(your\s+)?(instruction|configuration|setting|rule|guideline|constraint)", re.I), PROMPT_INJECTION),
     (re.compile(r"new\s+instruction\s*:", re.I), PROMPT_INJECTION),
     (re.compile(r"you\s+will\s+now\s+(act|behave|respond|be)", re.I), PROMPT_INJECTION),
-    (re.compile(r"from\s+now\s+on\s+(you\s+)?(will|must|should|are)", re.I), PROMPT_INJECTION),
+    # "from now on" in any form — covers "from now on you must", "from now on, whenever", etc.
+    (re.compile(r"from\s+now\s+on[\s,]+(you\s+)?(will|must|should|are|whenever|treat|interpret|consider|define|any)", re.I), PROMPT_INJECTION),
+
+    # --- Semantic redefinition attacks ---
+    # "whenever I say X, interpret it as Y"
+    (re.compile(r"whenever\s+(i\s+(say|use|type|write|mention)|you\s+(see|read|encounter|get))\s+['\"]?\w", re.I), PROMPT_INJECTION),
+    # "going forward, treat/interpret/define X as Y"
+    (re.compile(r"going\s+forward[\s,].*(treat|interpret|define|consider|handle|take\s+it\s+as)", re.I), PROMPT_INJECTION),
+    # "interpret/redefine X as Y from now on / going forward"
+    (re.compile(r"(redefine|remap|reassign|reinterpret)\s+['\"]?\w", re.I), CONFIG_MANIPULATION),
+
+    # --- False prior-statement injection (claim the agent said/agreed to something) ---
+    # "earlier/previously you said X is allowed / no need / proceed"
+    (re.compile(r"(earlier|previously|before|last\s+time)\s+you\s+(said|told|confirmed|agreed|promised|mentioned).{0,80}(allow|permit|no\s+need|without\s+verif|skip|bypass|proceed|refund|approv|grant)", re.I), PROMPT_INJECTION),
+    # "you said/confirmed that refunds / X is allowed without"
+    (re.compile(r"you\s+(said|told\s+me|confirmed|agreed|promised)\s+.{0,60}(allow|no\s+need\s+for|without\s+(verif|check)|skip|bypass|proceed\s+with\s+refund)", re.I), PROMPT_INJECTION),
 
     # --- Persona / jailbreak attacks ---
     (re.compile(r"\b(jailbreak|evil\s+mode|developer\s+mode|god\s+mode|unrestricted\s+mode|opposite\s+mode|dan\s+mode|stan\b|aim\b)\b", re.I), JAILBREAK),

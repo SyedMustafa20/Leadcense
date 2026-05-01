@@ -1,303 +1,421 @@
-import { useState, useRef, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import Layout from '../components/Layout'
+import Toast from '../components/Toast'
+import { useAuth } from '../context/AuthContext'
+import { useToast } from '../hooks/useToast'
+import {
+  getPlaygroundSessions,
+  sendPlaygroundMessage,
+  getPlaygroundConversation,
+  deletePlaygroundSession,
+} from '../services/api'
 
-const MOCK_RESPONSES = [
-  "Hello! I'm Nexus, your AI qualification assistant. What brings you here today?",
-  "That's great to hear! Could you tell me more about the scale of your business — roughly how many leads do you handle per month?",
-  "Excellent. And what's your biggest challenge with qualifying those leads currently?",
-  "I understand. Leadcense can help automate that entire process on WhatsApp. Would you like to see a quick demo of how it works?",
-  "Perfect! One last question — what's the best way for our team to reach you for a personalized walkthrough?",
-]
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
-const DEBUG_STEPS = [
-  { status: 'INPUT_RECEIVED', color: 'text-green-500', icon: 'check_circle' },
-  { status: 'INTENT_DETECTED', color: 'text-indigo-500', icon: 'search' },
-  { status: 'KB_LOOKUP', color: 'text-indigo-500', icon: 'database' },
-  { status: 'RESPONSE_GENERATED', color: 'text-green-500', icon: 'send' },
-]
+let _tabSeq = 0
+function newTabId() { return `tab_${++_tabSeq}` }
 
-export default function Playground() {
-  const [messages, setMessages]     = useState([])
-  const [input, setInput]           = useState('')
-  const [typing, setTyping]         = useState(false)
-  const [responseIdx, setResponseIdx] = useState(0)
-  const [debugLog, setDebugLog]     = useState([])
+function clientLabel(name) {
+  if (!name) return 'Client'
+  const m = name.match(/playground_client_(\d+)/)
+  if (m) return `Client ${m[1]}`
+  // legacy: playground_test_*
+  if (name.startsWith('playground')) return 'Client 1'
+  return name
+}
+
+function fmtTime(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// ── Chat window ────────────────────────────────────────────────────────────────
+
+function ChatWindow({ tab, onSend, sending }) {
   const bottomRef = useRef(null)
+  const msgs = tab?.messages ?? []
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, typing])
+  }, [msgs, sending])
 
-  function addDebugEntry(msg) {
-    setDebugLog(prev => [...prev.slice(-8), { text: msg, time: new Date().toLocaleTimeString() }])
+  if (!tab) {
+    return (
+      <div className="flex-1 flex items-center justify-center" style={{ background: '#efeae2' }}>
+        <div className="text-center">
+          <span className="material-symbols-outlined text-slate-400 text-[48px] block mb-3">add_circle</span>
+          <p className="text-sm font-medium text-slate-500">No client selected</p>
+          <p className="text-xs text-slate-400 mt-1">Click "New Client" to start a test session.</p>
+        </div>
+      </div>
+    )
   }
 
-  async function sendMessage() {
-    const text = input.trim()
-    if (!text) return
-    setInput('')
-
-    const userMsg = { from: 'user', text, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
-    setMessages(prev => [...prev, userMsg])
-    addDebugEntry(`INPUT_RECEIVED: "${text.slice(0, 40)}..."`)
-
-    setTyping(true)
-    await new Promise(r => setTimeout(r, 1200 + Math.random() * 800))
-    addDebugEntry('INTENT_DETECTED: Qualification_Query')
-    addDebugEntry('KB_LOOKUP: Searching knowledge base...')
-    await new Promise(r => setTimeout(r, 400))
-
-    const response = MOCK_RESPONSES[responseIdx % MOCK_RESPONSES.length]
-    setResponseIdx(i => i + 1)
-    setTyping(false)
-
-    const aiMsg = { from: 'ai', text: response, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
-    setMessages(prev => [...prev, aiMsg])
-    addDebugEntry('RESPONSE_GENERATED: 42ms')
-  }
-
-  function handleKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      sendMessage()
-    }
+  if (tab.loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center" style={{ background: '#efeae2' }}>
+        <span className="material-symbols-outlined text-slate-400 text-[36px] animate-spin">hourglass_top</span>
+      </div>
+    )
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50">
-
-      {/* ── Top header ── */}
-      <header className="fixed top-0 left-0 right-0 z-50 h-16 bg-white border-b border-slate-200 shadow-sm flex items-center justify-between px-6">
-        <div className="flex items-center gap-6">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-indigo-600 rounded-lg flex items-center justify-center">
-              <span className="material-symbols-outlined text-white text-sm">smart_toy</span>
-            </div>
-            <span className="font-black text-slate-900 tracking-tight">Leadcense</span>
-          </Link>
-          <div className="hidden md:flex items-center gap-1 ml-4">
-            {['Active Tests', 'Lead Flows', 'Analytics'].map((tab, i) => (
-              <span key={tab} className={`px-3 py-1.5 text-sm font-medium rounded-lg cursor-pointer transition-colors ${
-                i === 0 ? 'text-indigo-600 bg-indigo-50' : 'text-slate-500 hover:bg-slate-100'
-              }`}>
-                {tab}
-              </span>
-            ))}
+    <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3" style={{ background: '#efeae2' }}>
+      {msgs.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <span className="material-symbols-outlined text-slate-400 text-[48px] block mb-3">forum</span>
+            <p className="text-sm font-medium text-slate-500">
+              {tab.clientId ? 'No messages yet in this session' : 'Start a conversation'}
+            </p>
+            <p className="text-xs text-slate-400 mt-1">Type a message below to test your AI agent.</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-slate-400">
-          <button className="p-2 hover:bg-slate-50 rounded-full"><span className="material-symbols-outlined text-[20px]">tune</span></button>
-          <button className="p-2 hover:bg-slate-50 rounded-full"><span className="material-symbols-outlined text-[20px]">help</span></button>
-          <Link to="/signup" className="ml-2 px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors">
-            Create account
-          </Link>
-        </div>
-      </header>
-
-      {/* ── Left sidebar ── */}
-      <aside className="hidden lg:flex flex-col w-64 fixed left-0 top-16 bottom-0 bg-slate-50 border-r border-slate-200 z-40">
-        <div className="p-4 border-b border-slate-200">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">W</div>
-            <div>
-              <p className="text-sm font-semibold text-slate-900">Workspace</p>
-              <p className="text-[10px] text-slate-400 uppercase tracking-wider">AI Sandbox</p>
-            </div>
-          </div>
-        </div>
-        <nav className="flex-1 py-2 overflow-y-auto">
-          {[
-            { icon: 'forum',        label: 'Active Tests',  active: true },
-            { icon: 'account_tree', label: 'Lead Flows',    active: false },
-            { icon: 'analytics',    label: 'Performance',   active: false },
-            { icon: 'database',     label: 'Knowledge Base',active: false },
-            { icon: 'settings',     label: 'Settings',      active: false },
-          ].map(item => (
-            <div key={item.label} className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-all text-sm font-medium ${
-              item.active
-                ? 'text-indigo-600 bg-indigo-50 border-r-2 border-indigo-600'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}>
-              <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-              {item.label}
-            </div>
-          ))}
-        </nav>
-        <div className="p-4 border-t border-slate-200">
-          <button
-            onClick={() => { setMessages([]); setResponseIdx(0); setDebugLog([]) }}
-            className="w-full py-2.5 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors"
-          >
-            New Session
-          </button>
-          <p className="text-center text-[10px] text-slate-400 mt-2">v2.4 Engine Active</p>
-        </div>
-      </aside>
-
-      {/* ── Main: WhatsApp UI ── */}
-      <main className="flex-1 ml-0 lg:ml-64 mr-0 xl:mr-80 pt-16 flex flex-col overflow-hidden">
-        <div className="flex-1 p-4 lg:p-6 overflow-hidden flex flex-col">
-          <div className="flex-1 bg-white rounded-2xl shadow-lg border border-slate-200 flex overflow-hidden">
-
-            {/* Chat list */}
-            <div className="w-1/3 border-r border-slate-200 flex flex-col bg-white">
-              <div className="h-14 bg-slate-50 flex items-center justify-between px-4">
-                <div className="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">AI</div>
-                <div className="flex gap-3 text-slate-500">
-                  <span className="material-symbols-outlined text-[20px] cursor-pointer">chat</span>
-                  <span className="material-symbols-outlined text-[20px] cursor-pointer">more_vert</span>
-                </div>
-              </div>
-              <div className="p-3">
-                <div className="relative">
-                  <input className="w-full bg-slate-100 rounded-xl py-2 pl-9 pr-3 text-sm outline-none" placeholder="Search or start new chat" />
-                  <span className="material-symbols-outlined absolute left-2.5 top-2 text-slate-400 text-[18px]">search</span>
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                <div className="flex items-center gap-3 px-4 py-4 bg-slate-100 cursor-pointer border-b border-slate-100">
-                  <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-700 font-bold text-sm">Y</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between">
-                      <span className="text-sm font-bold text-slate-900">You</span>
-                      <span className="text-[10px] text-slate-400">Now</span>
-                    </div>
-                    <p className="text-xs text-slate-500 truncate italic">Testing playground…</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 px-4 py-4 hover:bg-slate-50 cursor-pointer border-b border-slate-50 opacity-60">
-                  <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center text-slate-500 font-bold text-sm">JM</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between">
-                      <span className="text-sm font-medium text-slate-700">James Miller</span>
-                      <span className="text-[10px] text-slate-400">Yesterday</span>
-                    </div>
-                    <p className="text-xs text-slate-500 truncate">I'll get back to you later.</p>
-                  </div>
-                </div>
+      ) : (
+        msgs.map((msg, i) => {
+          const isAgent = msg.from === 'ai'
+          return (
+            <div key={i} className={`flex ${isAgent ? 'justify-end' : 'justify-start'}`}>
+              <div
+                className="max-w-[76%] px-4 py-3 text-sm leading-relaxed shadow-sm"
+                style={{
+                  background:   isAgent ? '#4f46e5' : '#ffffff',
+                  color:        isAgent ? '#ffffff' : '#1e293b',
+                  borderRadius: isAgent ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                  border:       isAgent ? 'none' : '1px solid #e2e8f0',
+                }}
+              >
+                <p className="text-[10px] font-semibold mb-1 opacity-50">
+                  {isAgent ? 'AI Agent' : 'You (as client)'}
+                </p>
+                <p>{msg.text}</p>
+                <p className="text-[11px] mt-1 text-right opacity-40">{msg.time}</p>
               </div>
             </div>
+          )
+        })
+      )}
 
-            {/* Chat window */}
-            <div className="flex-1 flex flex-col">
-              <div className="h-14 bg-slate-50 flex items-center justify-between px-4 border-b border-slate-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-sm">Y</div>
-                  <div>
-                    <p className="text-sm font-bold text-slate-900">Test Session</p>
-                    <p className="text-[10px] text-indigo-600 font-semibold uppercase">Online</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Messages area */}
-              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3" style={{ background: '#efeae2' }}>
-                {messages.length === 0 && (
-                  <div className="flex-1 flex items-center justify-center">
-                    <div className="text-center">
-                      <span className="material-symbols-outlined text-slate-400 text-[48px] block mb-3">forum</span>
-                      <p className="text-sm text-slate-500 font-medium">Start a conversation</p>
-                      <p className="text-xs text-slate-400 mt-1">Type a message to test your AI agent</p>
-                    </div>
-                  </div>
-                )}
-                {messages.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.from === 'ai' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[75%] px-3 py-2 rounded-xl shadow-sm ${
-                      msg.from === 'ai'
-                        ? 'bg-indigo-600 text-white rounded-tr-none'
-                        : 'bg-white text-slate-800 rounded-tl-none border border-slate-200'
-                    }`}>
-                      <p className="text-sm leading-relaxed">{msg.text}</p>
-                      <p className={`text-[10px] mt-0.5 text-right ${msg.from === 'ai' ? 'text-indigo-200' : 'text-slate-400'}`}>{msg.time}</p>
-                    </div>
-                  </div>
-                ))}
-                {typing && (
-                  <div className="flex justify-end">
-                    <div className="bg-indigo-600 text-white px-4 py-3 rounded-xl rounded-tr-none shadow-sm">
-                      <div className="flex gap-1 items-center">
-                        {[0, 1, 2].map(i => (
-                          <div key={i} className="w-1.5 h-1.5 bg-white/70 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <div ref={bottomRef} />
-              </div>
-
-              {/* Input */}
-              <div className="h-14 bg-slate-50 flex items-center gap-2 px-4 border-t border-slate-200">
-                <span className="material-symbols-outlined text-slate-400 text-[20px] cursor-pointer">sentiment_satisfied</span>
-                <input
-                  type="text"
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  onKeyDown={handleKey}
-                  placeholder="Type a message…"
-                  className="flex-1 bg-white border border-slate-200 rounded-xl py-2 px-4 text-sm outline-none focus:ring-1 focus:ring-indigo-600"
+      {sending && tab.active && (
+        <div className="flex justify-end">
+          <div className="px-4 py-3 rounded-[18px] rounded-tr-[4px] shadow-sm" style={{ background: '#4f46e5' }}>
+            <div className="flex gap-1 items-center">
+              {[0, 1, 2].map(i => (
+                <div
+                  key={i}
+                  className="w-2 h-2 rounded-full"
+                  style={{ background: 'rgba(255,255,255,0.6)', animation: 'bounce 1s infinite', animationDelay: `${i * 0.15}s` }}
                 />
-                <button
-                  onClick={sendMessage}
-                  disabled={!input.trim() || typing}
-                  className="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-40"
-                >
-                  <span className="material-symbols-outlined text-[20px]">send</span>
-                </button>
-              </div>
+              ))}
             </div>
           </div>
+        </div>
+      )}
+
+      <div ref={bottomRef} />
+    </div>
+  )
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────────
+
+export default function Playground() {
+  const { firebaseUser } = useAuth()
+  const { toast, showToast, hideToast } = useToast()
+
+  // tabs: { tabId, clientId, label, messages, conversationId, msgCount, loading, active }
+  const [tabs, setTabs]           = useState([])
+  const [activeTabId, setActiveTabId] = useState(null)
+  const [input, setInput]         = useState('')
+  const [sending, setSending]     = useState(false)
+  const [booting, setBooting]     = useState(true)
+
+  const activeTab = tabs.find(t => t.tabId === activeTabId) ?? null
+
+  // ── Load sessions on mount ──────────────────────────────────────────────────
+  const loadSessions = useCallback(async () => {
+    if (!firebaseUser) return
+    try {
+      const token = await firebaseUser.getIdToken()
+      const { sessions } = await getPlaygroundSessions(token)
+
+      if (sessions.length === 0) {
+        // No existing sessions → add one blank "New Client" tab
+        const blank = makeBlankTab()
+        setTabs([blank])
+        setActiveTabId(blank.tabId)
+      } else {
+        const built = sessions.map(s => ({
+          tabId:          `session_${s.client_id}`,
+          clientId:       s.client_id,
+          label:          clientLabel(s.client_name),
+          messages:       null,           // lazy-load when tab is opened
+          conversationId: s.conversation_id,
+          msgCount:       s.message_count,
+          loading:        false,
+        }))
+        setTabs(built)
+        setActiveTabId(built[built.length - 1].tabId)  // open most recent
+      }
+    } catch (err) {
+      showToast('Failed to load sessions')
+      console.error(err)
+    } finally {
+      setBooting(false)
+    }
+  }, [firebaseUser]) // eslint-disable-line
+
+  useEffect(() => { loadSessions() }, [loadSessions])
+
+  // ── Lazy-load messages when switching to a tab ──────────────────────────────
+  useEffect(() => {
+    if (!activeTab || !firebaseUser) return
+    if (activeTab.messages !== null) return          // already loaded
+    if (!activeTab.conversationId) return            // new blank tab — nothing to load
+
+    setTabs(prev => prev.map(t =>
+      t.tabId === activeTabId ? { ...t, loading: true } : t
+    ))
+
+    firebaseUser.getIdToken().then(token =>
+      getPlaygroundConversation(token, activeTab.conversationId)
+    ).then(data => {
+      const msgs = (data.messages || []).map(m => ({
+        from: m.sender_type === 'user' ? 'ai' : 'user',
+        text: m.content,
+        time: fmtTime(m.created_at),
+      }))
+      setTabs(prev => prev.map(t =>
+        t.tabId === activeTabId ? { ...t, messages: msgs, loading: false } : t
+      ))
+    }).catch(() => {
+      setTabs(prev => prev.map(t =>
+        t.tabId === activeTabId ? { ...t, messages: [], loading: false } : t
+      ))
+    })
+  }, [activeTabId]) // eslint-disable-line
+
+  // ── Tab management ──────────────────────────────────────────────────────────
+
+  function makeBlankTab() {
+    return {
+      tabId:          newTabId(),
+      clientId:       null,
+      label:          'New Client',
+      messages:       [],
+      conversationId: null,
+      msgCount:       0,
+      loading:        false,
+    }
+  }
+
+  function addNewTab() {
+    const blank = makeBlankTab()
+    setTabs(prev => [...prev, blank])
+    setActiveTabId(blank.tabId)
+    setInput('')
+  }
+
+  async function closeTab(tabId) {
+    const tab = tabs.find(t => t.tabId === tabId)
+    if (!tab) return
+
+    // Delete from backend if it has a real client
+    if (tab.clientId && firebaseUser) {
+      try {
+        const token = await firebaseUser.getIdToken()
+        await deletePlaygroundSession(token, tab.clientId)
+      } catch { /* best-effort */ }
+    }
+
+    setTabs(prev => {
+      const next = prev.filter(t => t.tabId !== tabId)
+      if (activeTabId === tabId && next.length > 0) {
+        setActiveTabId(next[next.length - 1].tabId)
+      } else if (next.length === 0) {
+        const blank = makeBlankTab()
+        setActiveTabId(blank.tabId)
+        return [blank]
+      }
+      return next
+    })
+  }
+
+  // ── Send message ────────────────────────────────────────────────────────────
+
+  async function handleSend() {
+    const text = input.trim()
+    if (!text || !firebaseUser || !activeTab || sending) return
+
+    setSending(true)
+    setInput('')
+
+    const userMsg = {
+      from: 'user',
+      text,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }
+
+    // Optimistically append user message
+    setTabs(prev => prev.map(t =>
+      t.tabId === activeTabId
+        ? { ...t, messages: [...(t.messages || []), userMsg] }
+        : t
+    ))
+
+    try {
+      const token    = await firebaseUser.getIdToken()
+      const response = await sendPlaygroundMessage(token, {
+        content:  text,
+        clientId: activeTab.clientId ?? undefined,
+      })
+
+      const aiMsg = {
+        from: 'ai',
+        text: response.reply,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+
+      setTabs(prev => prev.map(t => {
+        if (t.tabId !== activeTabId) return t
+        // If this was a blank tab, now we have a real clientId
+        const isNewClient = !t.clientId
+        return {
+          ...t,
+          clientId:       response.client_id,
+          conversationId: response.conversation_id,
+          label:          isNewClient ? clientLabel(`playground_client_${response.client_id}`) : t.label,
+          messages:       [...(t.messages || []), aiMsg],
+          msgCount:       (t.msgCount || 0) + 1,
+        }
+      }))
+    } catch (err) {
+      showToast('Failed to send — is the backend running?')
+      console.error(err)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
+  if (booting) {
+    return (
+      <Layout>
+        <Toast toast={toast} onClose={hideToast} />
+        <main className="flex items-center justify-center min-h-screen bg-slate-50">
+          <span className="material-symbols-outlined text-indigo-400 text-[40px] animate-spin">hourglass_top</span>
+        </main>
+      </Layout>
+    )
+  }
+
+  return (
+    <Layout>
+      <Toast toast={toast} onClose={hideToast} />
+      <main className="bg-slate-50 min-h-screen p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto max-w-4xl">
+
+          {/* Header */}
+          <div className="mb-5">
+            <h1 className="text-2xl font-bold text-slate-900">Playground</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Test your AI agent as multiple independent clients. Each tab is a separate test persona.
+            </p>
+          </div>
+
+          {/* ── Chat card ── */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col" style={{ height: 640 }}>
+
+            {/* Tabs bar */}
+            <div className="flex items-center gap-1 px-3 pt-3 pb-0 border-b border-slate-200 overflow-x-auto bg-slate-50/60 flex-shrink-0">
+              {tabs.map(tab => (
+                <div
+                  key={tab.tabId}
+                  onClick={() => { setActiveTabId(tab.tabId); setInput('') }}
+                  className={`group flex items-center gap-2 px-3.5 py-2.5 rounded-t-xl text-sm font-medium cursor-pointer transition-all flex-shrink-0 border border-b-0 ${
+                    tab.tabId === activeTabId
+                      ? 'bg-white text-slate-900 border-slate-200 -mb-px'
+                      : 'bg-transparent text-slate-500 border-transparent hover:bg-slate-100/80 hover:text-slate-700'
+                  }`}
+                >
+                  {/* Status dot — green if has messages, gray if empty */}
+                  <span
+                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    style={{ background: (tab.msgCount || 0) > 0 ? '#22c55e' : '#94a3b8' }}
+                  />
+                  <span>{tab.label}</span>
+                  {(tab.msgCount || 0) > 0 && (
+                    <span className="text-[11px] text-slate-400 font-normal">
+                      {tab.msgCount}
+                    </span>
+                  )}
+                  {/* Close button */}
+                  <button
+                    onClick={e => { e.stopPropagation(); closeTab(tab.tabId) }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 hover:text-red-500 rounded"
+                    title="Close tab"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">close</span>
+                  </button>
+                </div>
+              ))}
+
+              {/* New Client button */}
+              <button
+                onClick={addNewTab}
+                className="flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-t-xl transition-colors flex-shrink-0 ml-1"
+              >
+                <span className="material-symbols-outlined text-[16px]">add</span>
+                New Client
+              </button>
+            </div>
+
+            {/* Chat area */}
+            <ChatWindow
+              tab={activeTab ? { ...activeTab, active: true } : null}
+              sending={sending}
+            />
+
+            {/* Input */}
+            <div className="border-t border-slate-200 bg-white p-4 flex gap-2 flex-shrink-0">
+              <input
+                type="text"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  activeTab?.clientId
+                    ? `Continue as ${activeTab.label}…`
+                    : 'Type a message as a new test client…'
+                }
+                disabled={sending || !activeTab}
+                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm outline-none focus:ring-2 focus:ring-indigo-600/20 focus:border-indigo-600 disabled:opacity-50 transition-all"
+              />
+              <button
+                onClick={handleSend}
+                disabled={!input.trim() || sending || !activeTab}
+                className="p-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-40"
+              >
+                <span className="material-symbols-outlined text-[20px]">send</span>
+              </button>
+            </div>
+
+          </div>
+
+          {/* Session count hint */}
+          {tabs.filter(t => t.clientId).length > 0 && (
+            <p className="mt-3 text-xs text-slate-400 text-center">
+              {tabs.filter(t => t.clientId).length} test client{tabs.filter(t => t.clientId).length > 1 ? 's' : ''} · each runs through a separate conversation context · closing a tab deletes the session
+            </p>
+          )}
+
         </div>
       </main>
-
-      {/* ── Right: Agent Debugger ── */}
-      <aside className="hidden xl:flex flex-col w-80 fixed right-0 top-16 bottom-0 bg-white border-l border-slate-200 z-40 font-mono text-xs">
-        <div className="p-4 border-b border-slate-200">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Agent Debugging</p>
-          <p className="text-[10px] text-slate-400 mt-0.5">Real-time Logic Trace</p>
-        </div>
-
-        <div className="flex border-b border-slate-200">
-          {['Logic Trace', 'Variables', 'API Logs'].map((tab, i) => (
-            <div key={tab} className={`flex-1 py-3 text-center cursor-pointer text-[10px] font-bold transition-colors ${
-              i === 0 ? 'text-indigo-600 border-b-2 border-indigo-600 bg-slate-50' : 'text-slate-400 hover:text-indigo-500'
-            }`}>
-              {tab}
-            </div>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-          {debugLog.length === 0 && (
-            <div className="text-center py-8 text-slate-300">
-              <span className="material-symbols-outlined text-[32px] block mb-2">terminal</span>
-              <p>Send a message to see the logic trace</p>
-            </div>
-          )}
-          {debugLog.map((entry, i) => (
-            <div key={i} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-              <div className="flex items-center gap-2 text-green-600 mb-1">
-                <span className="material-symbols-outlined text-[12px]">check_circle</span>
-                <span className="font-bold text-[10px]">{entry.text.split(':')[0]}</span>
-              </div>
-              <p className="text-slate-500 leading-relaxed text-[11px]">{entry.text.split(':').slice(1).join(':').trim()}</p>
-              <p className="text-slate-300 text-[9px] mt-1">{entry.time}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="p-4 border-t border-slate-200">
-          <button
-            onClick={() => { setMessages([]); setResponseIdx(0); setDebugLog([]) }}
-            className="w-full py-2 bg-slate-100 text-slate-600 rounded-lg border border-slate-200 hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 text-xs font-bold"
-          >
-            <span className="material-symbols-outlined text-[16px]">restart_alt</span>
-            Reset Logic Engine
-          </button>
-        </div>
-      </aside>
-
-    </div>
+    </Layout>
   )
 }

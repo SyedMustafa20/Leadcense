@@ -96,7 +96,7 @@ def delete_user(
             detail="User not found.",
         )
 
-    user.is_active = False
+    db.delete(user)
     db.commit()
 
-    return {"detail": "User account deactivated successfully."}
+    return {"detail": "User account deleted successfully."}

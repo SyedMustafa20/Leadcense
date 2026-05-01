@@ -113,10 +113,22 @@ def process_conversation(
                     '"requirement": string|null, "budget": string|null, '
                     '"timeline": string|null, "location": string|null, '
                     '"tag": "hot"|"warm"|"cold"|null, "score": integer_0_to_100|null, '
-                    '"distinct_requirements": [string]}\n\n'
-                    "distinct_requirements: list every separate requirement or interest the "
-                    "client expressed (e.g. ['3BR villa in Marina', 'studio for investment']). "
-                    "Use an empty list if only one requirement was discussed.\n\n"
+                    '"separate_opportunities": [string]}\n\n'
+                    "CRITICAL RULES FOR requirement AND separate_opportunities:\n"
+                    "requirement: Write ONE comprehensive sentence describing everything the "
+                    "client wants, including all features, capabilities, and constraints they "
+                    "mentioned. Do NOT leave features out — consolidate them all into this "
+                    "single field. Example: 'Digital billing software with sales records, "
+                    "product catalogue, and store analytics for a 100-seat restaurant.'\n\n"
+                    "separate_opportunities: ONLY use this for clients who are clearly asking "
+                    "about MULTIPLE COMPLETELY SEPARATE purchase decisions that would result "
+                    "in separate transactions (e.g. a real estate client who wants both a "
+                    "family home AND an investment studio — two separate purchases). "
+                    "Features, modules, or capabilities of a single product/service are NOT "
+                    "separate opportunities — they belong in `requirement`. "
+                    "Leave this as an empty list [] in almost all cases. "
+                    "Only populate it when you are certain the client has two or more "
+                    "genuinely independent purchase intents.\n\n"
                     "Scoring guide: 0-30 cold, 31-65 warm, 66-100 hot."
                 ),
             },
@@ -134,22 +146,26 @@ def process_conversation(
             return
 
         raw_input = "\n".join(m["content"] for m in messages if m["role"] == "user")
-        distinct_requirements: list[str] = extracted.pop("distinct_requirements", [])
+        separate_opportunities: list[str] = extracted.pop("separate_opportunities", [])
 
-        # ── 3. Resolve lead(s) and link to this conversation ───────────────
+        # ── 3. Update qualification state in Redis ─────────────────────────
+        # Mark any pending required fields as answered based on what was extracted.
+        # This is what allows the agent to detect [QUALIFICATION COMPLETE] in real time.
+        _update_q_state_from_extraction(conversation_id, extracted)
+
+        # ── 4. Resolve lead(s) and link to this conversation ───────────────
         db = SessionLocal()
         try:
-            if len(distinct_requirements) > 1:
-                # Multiple distinct interests detected — ensure one lead per requirement.
+            if len(separate_opportunities) > 1:
+                # Genuinely separate purchase intents — one lead per opportunity.
                 _upsert_multi_leads(
                     db, user_id, client_id, conversation_id,
                     active_lead_id, extracted, new_summary, raw_input,
-                    distinct_requirements,
+                    separate_opportunities,
                 )
-                # The "active" lead for this context is the first (or existing) one.
                 lead = _find_active_lead(db, user_id, client_id, active_lead_id)
             else:
-                # Single-interest flow: find or create one lead and link it.
+                # Single opportunity (the default for almost every conversation).
                 lead = _resolve_lead(
                     db, user_id, client_id, conversation_id,
                     active_lead_id, extracted, new_summary, raw_input,
@@ -157,8 +173,6 @@ def process_conversation(
 
             db.commit()
 
-            # Write the resolved lead_id back into Redis so the next task
-            # can skip the DB lookup entirely.
             if lead:
                 ctx_mgr.update_active_lead(conversation_id, lead.id)
 
@@ -173,6 +187,36 @@ def process_conversation(
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+def _update_q_state_from_extraction(conversation_id: int, extracted: dict) -> None:
+    """
+    After each extraction run, move pending fields that now have values into
+    the answered dict so the agent can detect [QUALIFICATION COMPLETE].
+    """
+    ctx = ctx_mgr.get_context(conversation_id)
+    if not ctx:
+        return
+    q_state = ctx.get("q_state", {})
+    pending: list[str] = q_state.get("pending_fields", [])
+    if not pending:
+        return
+
+    newly_answered: dict = {}
+    still_pending: list[str] = []
+    for field in pending:
+        val = extracted.get(field)
+        if val:
+            newly_answered[field] = val
+        else:
+            still_pending.append(field)
+
+    if newly_answered:
+        ctx_mgr.update_q_state(conversation_id, newly_answered, still_pending)
+        log.info(
+            "conv=%s qualification progress: answered=%s still_pending=%s",
+            conversation_id, list(newly_answered.keys()), still_pending,
+        )
+
 
 def _ensure_link(db, lead_id: int, conversation_id: int) -> None:
     """Create the LeadConversation row if it doesn't exist yet."""
@@ -265,13 +309,14 @@ def _upsert_multi_leads(
     base_extracted: dict,
     summary: str,
     raw_input: str,
-    distinct_requirements: list[str],
+    separate_opportunities: list[str],
 ) -> None:
     """
-    Multi-interest path — one Lead row per distinct requirement.
+    Multi-opportunity path — one Lead row per genuinely separate purchase intent.
 
-    Existing open leads for this client are matched by requirement text to
-    avoid creating duplicates on repeated summarisation runs.
+    Only called when the LLM identifies truly independent transactions (e.g. a
+    client who wants both a family home and an investment property). Existing
+    open leads are matched by requirement text to avoid duplicates on re-runs.
     """
     existing_leads = (
         db.query(Lead)
@@ -280,8 +325,8 @@ def _upsert_multi_leads(
     )
     existing_reqs = {(l.requirement or "").lower(): l for l in existing_leads}
 
-    for req_text in distinct_requirements:
-        match = existing_reqs.get(req_text.lower())
+    for opportunity in separate_opportunities:
+        match = existing_reqs.get(opportunity.lower())
         if match:
             lead = match
         else:
@@ -290,12 +335,12 @@ def _upsert_multi_leads(
                 user_id=user_id,
                 status="new",
                 source="whatsapp",
-                requirement=req_text,
+                requirement=opportunity,
             )
             db.add(lead)
             db.flush()
 
         # Merge shared fields (budget, timeline, etc.) without overwriting requirement
-        merged = {**base_extracted, "requirement": lead.requirement or req_text}
+        merged = {**base_extracted, "requirement": lead.requirement or opportunity}
         _apply_extracted(lead, merged, summary, raw_input)
         _ensure_link(db, lead.id, conversation_id)

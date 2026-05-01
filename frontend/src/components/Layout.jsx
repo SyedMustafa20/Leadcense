@@ -1,14 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { logOut } from '../services/firebase'
 
 const NAV_ITEMS = [
-  { label: 'Dashboard',     path: '/dashboard',              icon: 'dashboard' },
-  { label: 'Playground',    path: '/dashboard?tab=playground', icon: 'play_circle' },
-  { label: 'Leads',         path: '/leads',                  icon: 'group' },
-  { label: 'Conversations', path: '/conversations',           icon: 'forum' },
-  { label: 'Agents',        path: '/agents',                 icon: 'smart_toy' },
+  { label: 'Dashboard',     path: '/dashboard',     icon: 'dashboard' },
+  { label: 'Playground',    path: '/playground',    icon: 'play_circle' },
+  { label: 'Leads',         path: '/leads',         icon: 'group' },
+  { label: 'Conversations', path: '/conversations', icon: 'forum' },
+  { label: 'Agents',        path: '/agents',        icon: 'smart_toy' },
 ]
 
 const BOTTOM_NAV = [
@@ -18,7 +18,6 @@ const BOTTOM_NAV = [
 export default function Layout({ children }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
   const { dbUser } = useAuth()
   const user = dbUser?.user
 
@@ -67,12 +66,7 @@ export default function Layout({ children }) {
           <nav className="flex flex-1 flex-col">
             <ul className="flex flex-1 flex-col gap-y-1" role="list">
               {NAV_ITEMS.map(item => {
-                const isPlayground = item.path.includes('?tab=playground')
-                const active = isPlayground
-                  ? location.pathname === '/dashboard' && searchParams.get('tab') === 'playground'
-                  : item.path === '/dashboard'
-                    ? location.pathname === '/dashboard' && !searchParams.get('tab')
-                    : location.pathname === item.path
+                const active = location.pathname === item.path
                 return (
                   <li key={item.path}>
                     <Link

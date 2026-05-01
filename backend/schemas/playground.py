@@ -1,18 +1,26 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
+from datetime import datetime
 
 
 class PlaygroundMessage(BaseModel):
-    content: str = Field(..., description="The message content from the client")
-    client_name: Optional[str] = Field(None, description="Optional: name of the simulated client")
+    content: str = Field(..., description="Message content from the simulated client")
+    client_id: Optional[int] = Field(None, description="Existing playground client ID; omit to create a new one")
 
 
 class PlaygroundResponse(BaseModel):
-    reply: str = Field(..., description="The agent's response")
-    conversation_id: int = Field(..., description="The conversation ID")
-    client_id: int = Field(..., description="The simulated client ID")
-
-
-class PlaygroundConversationHistory(BaseModel):
+    reply: str
     conversation_id: int
-    messages: list
+    client_id: int
+
+
+class PlaygroundSession(BaseModel):
+    client_id: int
+    client_name: str
+    conversation_id: Optional[int] = None
+    message_count: int
+    created_at: datetime
+
+
+class PlaygroundSessionsResponse(BaseModel):
+    sessions: List[PlaygroundSession]

@@ -50,17 +50,17 @@ export async function getDashboardMetrics(idToken) {
 }
 
 // Playground API endpoints
-export async function sendPlaygroundMessage(idToken, { content, client_name }) {
+export async function getPlaygroundSessions(idToken) {
+  return request('/playground/sessions', {
+    headers: { Authorization: `Bearer ${idToken}` },
+  })
+}
+
+export async function sendPlaygroundMessage(idToken, { content, clientId }) {
   return request('/playground/message', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${idToken}`,
-    },
-    body: JSON.stringify({
-      content,
-      client_name,
-    }),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ content, client_id: clientId ?? null }),
   })
 }
 
@@ -70,10 +70,42 @@ export async function getPlaygroundConversation(idToken, conversationId) {
   })
 }
 
-export async function deletePlaygroundConversation(idToken, conversationId) {
-  return request(`/playground/conversation/${conversationId}`, {
+export async function deletePlaygroundSession(idToken, clientId) {
+  return request(`/playground/session/${clientId}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${idToken}` },
+  })
+}
+
+export async function getLeads(idToken, { page = 1, perPage = 20, status, tag, search } = {}) {
+  const params = new URLSearchParams({ page, per_page: perPage })
+  if (status) params.set('status', status)
+  if (tag) params.set('tag', tag)
+  if (search) params.set('search', search)
+  return request(`/leads?${params}`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  })
+}
+
+export async function getLeadDetail(idToken, leadId) {
+  return request(`/leads/${leadId}`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  })
+}
+
+export async function updateLeadStatus(idToken, leadId, status) {
+  return request(`/leads/${leadId}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ status }),
+  })
+}
+
+export async function updateLeadNotes(idToken, leadId, notes) {
+  return request(`/leads/${leadId}/notes`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ notes }),
   })
 }
 
