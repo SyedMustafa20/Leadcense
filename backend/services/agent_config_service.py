@@ -1115,7 +1115,7 @@ def _build_generic_config(industry: str) -> dict:
 # Public factory function
 # ---------------------------------------------------------------------------
 
-def create_agent_config(user_id: int, industry: str) -> AgentConfig:
+def create_agent_config(user_id: int, company_id: int, industry: str) -> AgentConfig:
     """
     Build and return an AgentConfig instance tailored to the given industry.
     The returned object is NOT yet added to a database session.
@@ -1125,6 +1125,7 @@ def create_agent_config(user_id: int, industry: str) -> AgentConfig:
 
     return AgentConfig(
         user_id=user_id,
+        company_id=company_id,
         system_prompt=config_data["system_prompt"],
         temperature=config_data["temperature"],
         intent_recognition_threshold=config_data["intent_recognition_threshold"],

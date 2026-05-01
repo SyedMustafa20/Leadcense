@@ -7,6 +7,7 @@ export default function Settings() {
   const { dbUser } = useAuth()
   const navigate = useNavigate()
   const user = dbUser?.user
+  const company = dbUser?.company_info
 
   async function handleSignOut() {
     await logOut()
@@ -126,6 +127,100 @@ export default function Settings() {
                   <button className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors shadow-sm">
                     Save Changes
                   </button>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Company Info ── */}
+            <div className="lg:col-span-12 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <h3 className="text-base font-semibold text-slate-900">
+                  Company Information
+                </h3>
+                <span className="material-symbols-outlined text-slate-300">business</span>
+              </div>
+
+              <div className="p-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+
+                  {/* Company Name */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Company Name
+                    </label>
+                    <input
+                      defaultValue={company?.company_name ?? ''}
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 bg-white"
+                    />
+                  </div>
+
+                  {/* Company Size */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Company Size
+                    </label>
+                    <select
+                      defaultValue={company?.company_size ?? ''}
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 bg-white"
+                    >
+                      <option value="">Select size</option>
+                      <option value="1-10">1-10</option>
+                      <option value="2-10">2-10</option>
+                      <option value="11-50">11-50</option>
+                      <option value="51-200">51-200</option>
+                      <option value="200+">200+</option>
+                    </select>
+                  </div>
+
+                  {/* Location */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Location
+                    </label>
+                    <input
+                      defaultValue={company?.location ?? ''}
+                      placeholder="City, Country"
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 bg-white"
+                    />
+                  </div>
+
+                  {/* Industry */}
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Industry
+                    </label>
+                    <input
+                      defaultValue={company?.industry ?? ''}
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 bg-white"
+                    />
+                  </div>
+
+                  {/* Services (FULL WIDTH) */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Services
+                    </label>
+                    <textarea
+                      rows={3}
+                      defaultValue={company?.services ?? ''}
+                      placeholder="e.g. Web development, AI automation..."
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 bg-white"
+                    />
+                  </div>
+
+                  {/* Description (FULL WIDTH) */}
+                  <div className="sm:col-span-2">
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                      Company Description
+                    </label>
+                    <textarea
+                      rows={4}
+                      defaultValue={company?.description ?? ''}
+                      placeholder="Describe your company..."
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 bg-white"
+                    />
+                  </div>
+
                 </div>
               </div>
             </div>

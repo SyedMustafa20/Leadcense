@@ -8,6 +8,11 @@ class UserRegisterRequest(BaseModel):
     name: str
     phone_number: Optional[str] = None
     industry: str
+    company_name: str
+    company_size: str
+    location: str
+    services: Optional[str] = None
+    description: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -27,6 +32,7 @@ class UserResponse(BaseModel):
 class AgentConfigResponse(BaseModel):
     id: int
     user_id: int
+    company_id: Optional[int]
     system_prompt: Optional[str]
     temperature: Optional[float]
     intent_recognition_threshold: Optional[float]
@@ -45,7 +51,21 @@ class AgentConfigResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+class companyInfoResponse(BaseModel):
+    id: int
+    user_id: int
+    company_name: str
+    company_size: str
+    location: str
+    services: Optional[str]
+    industry: str
+    website: Optional[str]
+    description: Optional[str]
+
+    model_config = {"from_attributes": True}
+
 
 class RegisterResponse(BaseModel):
     user: UserResponse
     agent_config: AgentConfigResponse
+    company_info: companyInfoResponse

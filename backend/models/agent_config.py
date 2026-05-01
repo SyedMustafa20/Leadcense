@@ -10,6 +10,7 @@ class AgentConfig(Base):
 
     # Ownership (multi-tenant ready)
     user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    company_id = Column(Integer, ForeignKey("company_info.id"), index=True)
 
     # === CORE AI SETTINGS ===
     system_prompt = Column(Text, nullable=True)

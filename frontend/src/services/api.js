@@ -16,7 +16,7 @@ async function request(path, options = {}, timeoutMs = 15_000) {
   }
 }
 
-export async function registerUser(idToken, { name, phoneNumber, industry }) {
+export async function registerUser(idToken, { name, phoneNumber, industry, companyName, companySize, location, services, description }) {
   return request('/users/register', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -25,6 +25,11 @@ export async function registerUser(idToken, { name, phoneNumber, industry }) {
       name,
       phone_number: phoneNumber || null,
       industry,
+      company_name: companyName,
+      company_size: companySize,
+      location,
+      services: services || null,
+      description: description || null,
     }),
   })
 }

@@ -30,6 +30,14 @@ function validateStep2(name, phone, industry) {
   return e
 }
 
+function validateStep3(companyName, companySize, location) {
+  const e = {}
+  if (!companyName || companyName.trim().length < 2) e.companyName = 'Enter company name (min. 2 characters).'
+  if (!companySize) e.companySize = 'Please select company size.'
+  if (!location || location.trim().length < 2) e.location = 'Enter location (min. 2 characters).'
+  return e
+}
+
 function getStrength(pwd) {
   if (!pwd) return null
   let score = 0
@@ -87,13 +95,20 @@ export default function SignUp() {
   const [name, setName]         = useState('')
   const [phone, setPhone]       = useState('')
   const [industry, setIndustry] = useState('')
+  const [companyName, setCompanyName]   = useState('')
+  const [companySize, setCompanySize]   = useState('')
+  const [location, setLocation]         = useState('')
+  const [services, setServices]         = useState('')
+  const [description, setDescription]   = useState('')
+  const [website, setWebsite]           = useState('')
   const [touched, setTouched]   = useState({})
   const [busy, setBusy]         = useState(false)
 
   const s1Errors = validateStep1(email, password, confirm)
   const s2Errors = validateStep2(name, phone, industry)
+  const s3Errors = validateStep3(companyName, companySize, location)
   const touch    = field => setTouched(t => ({ ...t, [field]: true }))
-  const fieldErr = field => touched[field] ? (s1Errors[field] ?? s2Errors[field]) : undefined
+  const fieldErr = field => touched[field] ? (s1Errors[field] ?? s2Errors[field] ?? s3Errors[field]) : undefined
 
   const strength = getStrength(password)
 
@@ -109,11 +124,29 @@ export default function SignUp() {
     e.preventDefault()
     setTouched(t => ({ ...t, name: true, phone: true, industry: true }))
     if (Object.keys(s2Errors).length) return
+    setTouched({})
+    setStep(3)
+  }
+
+  async function handleStep3(e) {
+    e.preventDefault()
+    setTouched(t => ({ ...t, companyName: true, companySize: true, location: true }))
+    if (Object.keys(s3Errors).length) return
     setBusy(true)
     try {
       const cred  = await signUpWithEmail(email, password)
       const token = await cred.user.getIdToken()
-      const data  = await registerUser(token, { name: name.trim(), phoneNumber: phone || null, industry })
+      const data  = await registerUser(token, {
+        name: name.trim(),
+        phoneNumber: phone || null,
+        industry,
+        companyName: companyName.trim(),
+        companySize,
+        location: location.trim(),
+        website: website || null,
+        services: services || null,
+        description: description || null,
+      })
       setDbUser(data)
       navigate('/dashboard', { replace: true })
     } catch (err) {
@@ -158,19 +191,19 @@ export default function SignUp() {
           <div className="px-8 pt-8 pb-6 text-center border-b border-slate-100">
             <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <span className="material-symbols-outlined text-indigo-600 text-[28px]">
-                {step === 1 ? 'rocket_launch' : 'badge'}
+                {step === 1 ? 'rocket_launch' : step === 2 ? 'badge' : 'business'}
               </span>
             </div>
             <h1 className="text-2xl font-bold text-slate-900 mb-1">
-              {step === 1 ? 'Create your account' : 'About your business'}
+              {step === 1 ? 'Create your account' : step === 2 ? 'About you' : 'About your company'}
             </h1>
             <p className="text-slate-500 text-sm">
-              {step === 1 ? 'Start qualifying leads with AI' : 'Step 2 of 2 — almost there'}
+              {step === 1 ? 'Start qualifying leads with AI' : step === 2 ? 'Step 2 of 3 — tell us about yourself' : 'Step 3 of 3 — complete your profile'}
             </p>
 
             {/* Step indicator */}
             <div className="flex gap-2 justify-center mt-5">
-              {[1, 2].map(n => (
+              {[1, 2, 3].map(n => (
                 <div
                   key={n}
                   className="h-1 w-12 rounded-full transition-all duration-300"
@@ -327,6 +360,110 @@ export default function SignUp() {
                   <button
                     type="button"
                     onClick={() => { setStep(1); setTouched({}) }}
+                    className="flex-1 py-3 border border-slate-300 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="flex-1 py-3 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    Continue
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {step === 3 && (
+              <form onSubmit={handleStep3} noValidate className="flex flex-col gap-4">
+                <InputField label="Company name" error={fieldErr('companyName')} icon="business">
+                  <input
+                    type="text"
+                    value={companyName}
+                    onChange={e => setCompanyName(e.target.value)}
+                    onBlur={() => touch('companyName')}
+                    placeholder="Your Company Inc."
+                    className={inputCls(fieldErr('companyName'), true)}
+                  />
+                </InputField>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Company size</label>
+                  <select
+                    value={companySize}
+                    onChange={e => setCompanySize(e.target.value)}
+                    onBlur={() => touch('companySize')}
+                    className={`w-full px-4 py-2.5 rounded-xl border text-sm outline-none transition-all bg-white cursor-pointer ${
+                      fieldErr('companySize')
+                        ? 'border-red-400 ring-1 ring-red-300'
+                        : 'border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20'
+                    }`}
+                  >
+                    <option value="" disabled>Select company size</option>
+                    <option value="1-10">1-10 employees</option>
+                    <option value="11-50">11-50 employees</option>
+                    <option value="51-200">51-200 employees</option>
+                    <option value="201-500">201-500 employees</option>
+                    <option value="500+">500+ employees</option>
+                  </select>
+                  <FieldError msg={fieldErr('companySize')} />
+                </div>
+
+                <InputField label="Location" error={fieldErr('location')} icon="location_on">
+                  <input
+                    type="text"
+                    value={location}
+                    onChange={e => setLocation(e.target.value)}
+                    onBlur={() => touch('location')}
+                    placeholder="City, Country"
+                    className={inputCls(fieldErr('location'), true)}
+                  />
+                </InputField>
+
+                <InputField label="Website" error={fieldErr('website')} icon="language">
+                  <input
+                    type="text"
+                    value={website}
+                    onChange={e => setWebsite(e.target.value)}
+                    onBlur={() => touch('website')}
+                    placeholder="https://yourcompany.com"
+                    className={inputCls(fieldErr('website'), true)}
+                  />
+                </InputField>
+
+                <InputField label="Services" error={fieldErr('services')} optional>
+                  <textarea
+                    value={services}
+                    onChange={e => setServices(e.target.value)}
+                    placeholder="Describe the main services or products your company offers"
+                    rows="3"
+                    className={`w-full pl-4 pr-4 py-2.5 rounded-xl border text-sm outline-none transition-all bg-white ${
+                      fieldErr('services')
+                        ? 'border-red-400 ring-1 ring-red-300'
+                        : 'border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20'
+                    }`}
+                  />
+                </InputField>
+
+                <InputField label="Company description" error={fieldErr('description')} optional>
+                  <textarea
+                    value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    placeholder="Brief description of your company and its mission"
+                    rows="3"
+                    className={`w-full pl-4 pr-4 py-2.5 rounded-xl border text-sm outline-none transition-all bg-white ${
+                      fieldErr('description')
+                        ? 'border-red-400 ring-1 ring-red-300'
+                        : 'border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20'
+                    }`}
+                  />
+                </InputField>
+
+                <div className="flex gap-3 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => { setStep(2); setTouched({}) }}
                     className="flex-1 py-3 border border-slate-300 rounded-xl text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                   >
                     Back

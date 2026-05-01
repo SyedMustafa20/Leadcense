@@ -74,6 +74,8 @@ def handle_message(user_id: int, client_phone: str, content: str, db: Session) -
 
     fallback = agent_cfg.fallback_message or "I'm sorry, I didn't understand that. Could you rephrase?"
 
+
+
     # ── 2. Sanitize ───────────────────────────────────────────────────────
     san = sanitize(content)
     if not san.is_safe:
