@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@theme {
+  /* Brand / primary */
+  --color-primary: #4f46e5;
+  --color-primary-dark: #3525cd;
+  --color-primary-container: #eef2ff;
+  --color-on-primary: #ffffff;
+  --color-on-primary-container: #dad7ff;
+  --color-inverse-primary: #c3c0ff;
+  --color-surface-tint: #4f46e5;
+
+  /* Surfaces */
+  --color-background: #f8f9ff;
+  --color-surface: #f8f9ff;
+  --color-surface-container: #e5eeff;
+  --color-surface-container-low: #eff4ff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-high: #dce9ff;
+
+  /* Text */
+  --color-on-background: #0b1c30;
+  --color-on-surface: #0b1c30;
+  --color-on-surface-variant: #464555;
+
+  /* Semantic */
+  --color-secondary: #006591;
+  --color-secondary-container: #39b8fd;
+  --color-tertiary: #7e3000;
+  --color-error: #ba1a1a;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #410002;
+
+  /* Borders */
+  --color-outline: #777587;
+  --color-outline-variant: #c7c4d8;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+}
+
+/* Legacy CSS variables — used by Landing.jsx */
+:root {
+  --accent: #4f46e5;
+  --accent-bg: #eef2ff;
+  --accent-border: #c7d2fe;
+  --text: #64748b;
+  --text-h: #0f172a;
+  --bg: #ffffff;
+  --border: #e2e8f0;
+  --sans: 'Inter', sans-serif;
+}
+
+/* Typography utility classes matching mockup design system */
+@layer utilities {
+  .text-h1   { font-size: 36px; line-height: 44px; letter-spacing: -0.02em; }
+  .font-h1   { font-weight: 700; }
+  .text-h2   { font-size: 30px; line-height: 38px; letter-spacing: -0.02em; }
+  .font-h2   { font-weight: 600; }
+  .text-h3   { font-size: 24px; line-height: 32px; }
+  .font-h3   { font-weight: 600; }
+  .text-body-lg  { font-size: 18px; line-height: 28px; }
+  .font-body-lg  { font-weight: 400; }
+  .text-body-md  { font-size: 16px; line-height: 24px; }
+  .font-body-md  { font-weight: 400; }
+  .text-body-sm  { font-size: 14px; line-height: 20px; }
+  .font-body-sm  { font-weight: 400; }
+  .text-label-md { font-size: 14px; line-height: 20px; }
+  .font-label-md { font-weight: 500; }
+  .text-label-sm { font-size: 12px; line-height: 16px; letter-spacing: 0.05em; }
+  .font-label-sm { font-weight: 500; }
+  .text-data-tabular  { font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; }
+  .font-data-tabular  { font-weight: 400; }
+}
+
+/* Material Symbols */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar         { width: 6px; height: 6px; }
+::-webkit-scrollbar-track   { background: transparent; }
+::-webkit-scrollbar-thumb   { background: #cbd5e1; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+html, body { margin: 0; padding: 0; height: 100%; font-family: 'Inter', sans-serif; }
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: 'Inter', sans-serif;
+}
