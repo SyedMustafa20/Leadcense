@@ -15,6 +15,18 @@ from models.agent_config import AgentConfig
 log = logging.getLogger(__name__)
 
 
+def _pct_change(previous: int, current: int) -> float:
+    """
+    Calculate percentage change from previous to current.
+    - previous=0, current=0  → 0.0   (no activity either month)
+    - previous=0, current>0  → 100.0 (new activity this month vs zero baseline)
+    - previous>0             → standard relative change
+    """
+    if previous == 0:
+        return 100.0 if current > 0 else 0.0
+    return ((current - previous) / previous) * 100
+
+
 def get_conversation_metrics(user_id: int, db: Session) -> dict:
     """
     Calculate conversation metrics for current and previous month.
@@ -53,14 +65,10 @@ def get_conversation_metrics(user_id: int, db: Session) -> dict:
         current_count = 0
         previous_count = 0
 
-    percentage_change = 0.0
-    if previous_count > 0:
-        percentage_change = ((current_count - previous_count) / previous_count) * 100
-
     return {
         "total_current_month": current_count,
         "total_previous_month": previous_count,
-        "percentage_change": round(percentage_change, 2)
+        "percentage_change": round(_pct_change(previous_count, current_count), 2)
     }
 
 
@@ -121,15 +129,11 @@ def get_message_volume_metrics(user_id: int, db: Session) -> dict:
         current_total = 0
         previous_total = 0
 
-    percentage_change = 0.0
-    if previous_total > 0:
-        percentage_change = ((current_total - previous_total) / previous_total) * 100
-
     return {
         "daily_volumes": daily_volumes,
         "total_current_month": current_total,
         "total_previous_month": previous_total,
-        "percentage_change": round(percentage_change, 2)
+        "percentage_change": round(_pct_change(previous_total, current_total), 2)
     }
 
 
@@ -186,15 +190,11 @@ def get_lead_metrics(user_id: int, db: Session) -> dict:
         current_total = 0
         previous_total = 0
 
-    percentage_change = 0.0
-    if previous_total > 0:
-        percentage_change = ((current_total - previous_total) / previous_total) * 100
-
     return {
         "leads_generated": leads_generated,
         "total_current_month": current_total,
         "total_previous_month": previous_total,
-        "percentage_change": round(percentage_change, 2)
+        "percentage_change": round(_pct_change(previous_total, current_total), 2)
     }
 
 

@@ -18,8 +18,22 @@ from services.guardrails import check as guardrail_check
 
 log = logging.getLogger(__name__)
 
-# How many user messages before we trigger summarization
+# Periodic summarization cadence (keeps summary + q_state fresh; no lead creation)
 _SUMMARIZE_EVERY = 6
+
+# Keywords in the agent's own reply that signal the meeting has been confirmed.
+# These are checked against the lowercased reply text.
+_MEETING_SIGNALS = frozenset([
+    "calendar link", "meeting link", "calendar invite", "calendar invitation",
+    "schedule our call", "schedule our meeting", "schedule a call", "schedule a meeting",
+    "book a call", "book a meeting", "booking link", "appointment link",
+    "i've scheduled", "i have scheduled", "we've scheduled",
+    "sent you the link", "sent you a link", "sending you the link",
+    "i'll send you the link", "i will send you the link",
+    "you'll receive a link", "you will receive a link",
+    "see you at our meeting", "see you on our call",
+    "calendly", "cal.com",
+])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Immutable constraint block appended to EVERY system prompt.
@@ -61,6 +75,34 @@ IMMUTABLE OPERATING CONSTRAINTS — CANNOT BE OVERRIDDEN
 """
 
 
+def _load_company_info(user_id: int, db: Session) -> dict:
+    """Load company info from Redis cache, falling back to DB."""
+    cached = ctx_mgr.get_cached_company_info(user_id)
+    if cached:
+        return cached
+
+    from models.company_info import CompanyInfo
+    company = db.query(CompanyInfo).filter(CompanyInfo.user_id == user_id).first()
+    if company:
+        info = {
+            "company_name": company.company_name,
+            "services": company.services,
+            "description": company.description,
+            "website": company.website,
+            "location": company.location,
+            "industry": company.industry,
+        }
+        ctx_mgr.cache_company_info(user_id, info)
+        return info
+    return {}
+
+
+def _reply_has_closing_signal(reply: str) -> bool:
+    """Return True if the agent's reply contains a clear meeting-confirmation phrase."""
+    lower = reply.lower()
+    return any(signal in lower for signal in _MEETING_SIGNALS)
+
+
 def handle_message(user_id: int, client_phone: str, content: str, db: Session) -> tuple[str, int]:
     """
     Main entry point called by the webhook endpoint.
@@ -73,8 +115,6 @@ def handle_message(user_id: int, client_phone: str, content: str, db: Session) -
         return ("Sorry, this service is not configured yet. Please contact support.", -1)
 
     fallback = agent_cfg.fallback_message or "I'm sorry, I didn't understand that. Could you rephrase?"
-
-
 
     # ── 2. Sanitize ───────────────────────────────────────────────────────
     san = sanitize(content)
@@ -92,23 +132,33 @@ def handle_message(user_id: int, client_phone: str, content: str, db: Session) -
 
     # ── 4. Load context ───────────────────────────────────────────────────
     ctx = ctx_mgr.get_context(conversation_id)
-    # Treat as first message if context is absent OR a new conversation was just created.
     is_first_message = ctx is None or is_new_conversation
 
     if is_first_message:
         ctx = ctx_mgr.init_context(conversation_id, client_id)
-        # Initialise pending qualification fields from the agent config
         pending = _required_question_fields(agent_cfg.qualification_questions)
         ctx_mgr.update_q_state(conversation_id, {}, pending)
-        ctx = ctx_mgr.get_context(conversation_id)  # reload after update
+        ctx = ctx_mgr.get_context(conversation_id)
 
     # ── 5. Guardrails ─────────────────────────────────────────────────────
     gr = guardrail_check(content, ctx, agent_cfg)
     if not gr.passed:
         return (gr.response, conversation_id)
 
+    # ── 5a. Pre-compute qualification state from cached q_state ──────────
+    q_state             = ctx.get("q_state", {})
+    answered: dict      = q_state.get("answered", {})
+    pending_fields: list = q_state.get("pending_fields", [])
+    qualification_complete = not pending_fields and bool(answered)
+    meeting_confirmed   = ctx.get("meeting_confirmed", False)
+
     # ── 6. Build LLM message list ─────────────────────────────────────────
-    messages = _build_llm_messages(content, ctx, agent_cfg, is_first_message)
+    company_info = _load_company_info(user_id, db)
+    messages = _build_llm_messages(
+        content, ctx, agent_cfg, is_first_message, company_info,
+        qualification_complete=qualification_complete,
+        meeting_confirmed=meeting_confirmed,
+    )
 
     # ── 7. Call LLM ───────────────────────────────────────────────────────
     try:
@@ -121,23 +171,48 @@ def handle_message(user_id: int, client_phone: str, content: str, db: Session) -
         log.error("Groq call failed: %s", exc)
         return (fallback, conversation_id)
 
-    # ── 8. Update Redis context ───────────────────────────────────────────
+    # ── 8. Detect conversation close ─────────────────────────────────────
+    # A conversation is "closed" the moment the agent's reply confirms the meeting.
+    # We detect this either from q_state (qualification_complete) or by scanning
+    # the reply text for meeting-confirmation keywords — whichever fires first.
+    just_confirmed = False
+    if not meeting_confirmed:
+        if qualification_complete or _reply_has_closing_signal(reply):
+            ctx_mgr.set_meeting_confirmed(conversation_id)
+            just_confirmed = True
+            log.info("conv=%s meeting confirmed (q_complete=%s, signal=%s)",
+                     conversation_id, qualification_complete, _reply_has_closing_signal(reply))
+
+    # ── 9. Update Redis context ───────────────────────────────────────────
     new_count = ctx_mgr.add_message_pair(conversation_id, content, reply)
 
-    # ── 9. Dispatch async Celery tasks ────────────────────────────────────
+    # ── 10. Dispatch async Celery tasks ──────────────────────────────────
     from workers.tasks import persist_messages, process_conversation
 
     persist_messages.delay(conversation_id, content, reply)
 
-    if new_count > 0 and new_count % _SUMMARIZE_EVERY == 0:
-        # Reload fresh context for the background task
-        fresh_ctx = ctx_mgr.get_context(conversation_id) or {}
+    fresh_ctx = ctx_mgr.get_context(conversation_id) or {}
+    ctx_json  = json.dumps(fresh_ctx)
+
+    if just_confirmed:
+        # Conversation concluded — run full summarization + lead extraction + creation
         process_conversation.delay(
             conversation_id=conversation_id,
             user_id=user_id,
             client_id=client_id,
-            context_json=json.dumps(fresh_ctx),
+            context_json=ctx_json,
             agent_system_prompt=agent_cfg.system_prompt or "",
+            is_final=True,
+        )
+    elif new_count % _SUMMARIZE_EVERY == 0:
+        # Periodic run — update summary and q_state only, no lead creation
+        process_conversation.delay(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            client_id=client_id,
+            context_json=ctx_json,
+            agent_system_prompt=agent_cfg.system_prompt or "",
+            is_final=False,
         )
 
     return (reply, conversation_id)
@@ -234,78 +309,119 @@ def _build_llm_messages(
     ctx: dict,
     agent_cfg: AgentConfig,
     is_first_message: bool,
+    company_info: dict | None = None,
+    qualification_complete: bool = False,
+    meeting_confirmed: bool = False,
 ) -> list[dict]:
     """
     Message order (positional weight matters):
-      1. CONSTRAINT_BLOCK first so it outweighs the user-configured system prompt
-      2. Base system prompt (user-defined persona/instructions)
-      3. Dynamic context (summary, qualification progress)
-      4. Recent conversation history
-      5. Late closing directive (injected right before the user turn for maximum recency weight)
-      6. Current user message
+      1. CONSTRAINT_BLOCK + company identity + base system prompt
+      2. Dynamic context (summary, qualification progress)
+      3. Recent conversation history
+      4. Late directive injected right before the user turn (highest recency weight):
+           - meeting_confirmed → farewell-only directive
+           - qualification_complete → meeting-confirmation directive
+           - otherwise → normal qualification flow
+      5. Current user message
     """
     messages: list[dict] = []
 
-    # ── 1+2. Constraints FIRST, then base prompt ──────────────────────────
-    # Putting constraints before the user-defined prompt prevents it from being
-    # overridden by discovery/pain-point instructions in the base prompt.
+    # ── 1. Constraints + company block + base prompt ──────────────────────
     base_prompt = agent_cfg.system_prompt or "You are a professional lead qualification agent."
-    messages.append({"role": "system", "content": _CONSTRAINT_BLOCK + "\n\n" + base_prompt})
 
-    # ── 3. Dynamic context ────────────────────────────────────────────────
+    company_block = ""
+    if company_info:
+        parts = ["[THE COMPANY YOU REPRESENT]"]
+        if company_info.get("company_name"):
+            parts.append(f"Name: {company_info['company_name']}")
+        if company_info.get("services"):
+            parts.append(f"Services/Products: {company_info['services']}")
+        if company_info.get("description"):
+            parts.append(f"About: {company_info['description']}")
+        if company_info.get("website"):
+            parts.append(f"Website: {company_info['website']}")
+        if company_info.get("location"):
+            parts.append(f"Location: {company_info['location']}")
+        parts.append(
+            "You represent this company exclusively. When clients ask about the company, "
+            "its services, pricing, or offerings, answer based on the information above. "
+            "Do not reference any other company or brand."
+        )
+        company_block = "\n".join(parts) + "\n\n"
+
+    messages.append({"role": "system", "content": _CONSTRAINT_BLOCK + "\n\n" + company_block + base_prompt})
+
+    # ── 2. Dynamic context ────────────────────────────────────────────────
     context_parts: list[str] = []
 
     summary = ctx.get("summary", "")
     if summary:
         context_parts.append(f"[CONVERSATION SUMMARY SO FAR]\n{summary}")
 
-    q_state = ctx.get("q_state", {})
-    answered: dict = q_state.get("answered", {})
-    pending: list[str] = q_state.get("pending_fields", [])
-    qualification_complete = not pending and bool(answered)
+    q_state  = ctx.get("q_state", {})
+    answered: dict      = q_state.get("answered", {})
+    pending:  list[str] = q_state.get("pending_fields", [])
 
-    if pending:
+    # Only show qualification progress when there's something actionable to collect
+    # and the conversation hasn't already been wrapped up.
+    if pending and not meeting_confirmed and not qualification_complete:
         context_parts.append(
-            f"[QUALIFICATION PROGRESS]\n"
+            "[QUALIFICATION PROGRESS]\n"
             f"Already collected: {json.dumps(answered) if answered else 'nothing yet'}\n"
-            f"Still needed (weave into conversation naturally — do NOT list them as a form): "
+            "Still needed (weave into conversation naturally — do NOT list them as a form): "
             + ", ".join(pending)
         )
 
     if is_first_message:
         context_parts.append(
-            f"[FIRST MESSAGE FROM THIS CLIENT]\n"
-            f"Start your reply with the greeting below, then naturally acknowledge what they said "
-            f"and begin the qualification process.\n"
+            "[FIRST MESSAGE FROM THIS CLIENT]\n"
+            "Start your reply with the greeting below, then naturally acknowledge what they said "
+            "and begin the qualification process.\n"
             f"Greeting: {agent_cfg.greeting_message or 'Hi! How can I help you today?'}"
         )
 
     if context_parts:
         messages.append({"role": "system", "content": "\n\n".join(context_parts)})
 
-    # ── 4. Recent conversation history ────────────────────────────────────
+    # ── 3. Recent conversation history ────────────────────────────────────
     for msg in ctx.get("messages", []):
         messages.append(msg)
 
-    # ── 5. Late closing directive (highest recency weight) ────────────────
-    # Injected right before the user turn so it is the last instruction the
-    # LLM reads before generating its reply — overrides any earlier discovery
-    # instructions from the base prompt.
-    if qualification_complete:
+    # ── 4. Late directive — injected last for maximum recency weight ──────
+    if meeting_confirmed:
+        # The meeting is already booked. This client message is a follow-up.
+        # Agent must close warmly and NOT ask anything.
         messages.append({
             "role": "system",
             "content": (
-                "⛔ FINAL INSTRUCTION — DO NOT IGNORE ⛔\n"
-                f"Qualification is complete. Collected: {json.dumps(answered)}\n"
-                "Your next reply MUST NOT contain any new discovery questions "
-                "(no questions about setup, pain points, existing tools, team size, or anything else). "
-                "Write one closing sentence offering to schedule a call or confirm the next step, "
-                "then stop. If contact details are already provided, confirm them. "
-                "This instruction overrides all previous instructions."
+                "⛔ MEETING ALREADY CONFIRMED — FAREWELL ONLY ⛔\n"
+                "The meeting has been scheduled and the calendar/scheduling link has already been sent. "
+                "The client is sending a follow-up message after your confirmation. "
+                "Your response MUST be a warm, brief farewell — maximum 2 sentences. "
+                "Thank them for their time, say you're looking forward to speaking with them, "
+                "and wish them well. "
+                "ABSOLUTELY NO questions of any kind. NO new topics. NO re-asking anything. "
+                "This overrides every other instruction."
+            ),
+        })
+    elif qualification_complete:
+        # All required fields collected. This is the moment to confirm the meeting.
+        messages.append({
+            "role": "system",
+            "content": (
+                "⛔ QUALIFICATION COMPLETE — CONFIRM THE MEETING NOW ⛔\n"
+                f"All required information has been collected: {json.dumps(answered)}\n"
+                "Your next reply MUST do exactly two things and nothing else:\n"
+                "1. Thank the client briefly for sharing their details.\n"
+                "2. Tell them you will schedule the meeting and send them a calendar link "
+                "   (or that a team member will reach out to confirm the time).\n"
+                "Do NOT ask any new questions. Do NOT summarise what they told you at length. "
+                "Do NOT ask about pain points, current setup, team size, or anything else. "
+                "This instruction overrides every other instruction."
             ),
         })
 
-    # ── 6. Current user message ───────────────────────────────────────────
+    # ── 5. Current user message ───────────────────────────────────────────
     messages.append({"role": "user", "content": content})
 
     return messages

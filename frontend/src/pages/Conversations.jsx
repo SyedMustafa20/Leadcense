@@ -1,185 +1,351 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Layout from '../components/Layout'
+import Toast from '../components/Toast'
+import { useAuth } from '../context/AuthContext'
+import { useToast } from '../hooks/useToast'
+import { getConversations, getConversation } from '../services/api'
 
-const CHATS = [
-  { id: 1, name: 'James Wilson',  last: "I'd like to learn more about pricing.", time: '2m',      status: 'AI Agent',      statusColor: 'bg-indigo-100 text-indigo-700', active: true },
-  { id: 2, name: 'Sarah Chen',    last: 'Can I speak to a human agent?',          time: '15m',     status: 'Awaiting Human', statusColor: 'bg-amber-100 text-amber-700',  active: false },
-  { id: 3, name: 'Marcus Thorne', last: 'Thanks for the information!',             time: 'Yesterday', status: 'Resolved',    statusColor: 'bg-green-100 text-green-700',  active: false },
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function relativeTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime()
+  const m = Math.floor(diff / 60000)
+  const h = Math.floor(diff / 3600000)
+  const d = Math.floor(diff / 86400000)
+  if (m < 1)  return 'just now'
+  if (m < 60) return `${m}m`
+  if (h < 24) return `${h}h`
+  if (d === 1) return 'Yesterday'
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function fmtTime(iso) {
+  return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+}
+
+function fmtDateLabel(iso) {
+  const d = new Date(iso)
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return 'Today'
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+}
+
+function initials(name) {
+  if (!name) return '?'
+  return name.split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase()
+}
+
+function groupByDate(msgs) {
+  const groups = []
+  let currentKey = null
+  for (const msg of msgs) {
+    const key = new Date(msg.created_at).toDateString()
+    if (key !== currentKey) {
+      currentKey = key
+      groups.push({ dateIso: msg.created_at, messages: [] })
+    }
+    groups[groups.length - 1].messages.push(msg)
+  }
+  return groups
+}
+
+const AVATAR_PALETTE = [
+  'bg-indigo-100 text-indigo-700', 'bg-blue-100 text-blue-700',
+  'bg-purple-100 text-purple-700', 'bg-teal-100 text-teal-700',
+  'bg-rose-100 text-rose-700',     'bg-amber-100 text-amber-700',
 ]
 
-const MESSAGES = [
-  { from: 'user', text: 'Hi! I saw your ad on LinkedIn about AI lead qualification. Can you tell me more?', time: '10:24' },
-  { from: 'ai',   text: 'Hello James! I\'d be happy to help. Leadcense uses AI to qualify your WhatsApp leads 24/7. What\'s your main challenge with lead qualification today?', time: '10:24' },
-  { from: 'user', text: 'We get around 200 leads per week but our team can only handle 40–50 properly.', time: '10:25' },
-  { from: 'ai',   text: 'That\'s a common challenge. Our AI can pre-qualify all 200 leads and surface only the top 20–30% to your sales team. Would you like to see a demo?', time: '10:25' },
-  { from: 'user', text: "I'd like to learn more about pricing.", time: '10:26' },
-]
+// ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Conversations() {
-  const [activeChat, setActiveChat] = useState(1)
-  const [input, setInput] = useState('')
+  const { firebaseUser } = useAuth()
+  const { toast, showToast, hideToast } = useToast()
+
+  // List state
+  const [convList,     setConvList]     = useState([])
+  const [total,        setTotal]        = useState(0)
+  const [listLoading,  setListLoading]  = useState(true)
+  const [search,       setSearch]       = useState('')
+  const [page,         setPage]         = useState(1)
+  const perPage = 30
+
+  // Detail state
+  const [activeConv,  setActiveConv]  = useState(null)
+  const [messages,    setMessages]    = useState([])
+  const [msgLoading,  setMsgLoading]  = useState(false)
+
+  // Mobile: toggle between list and chat
+  const [showChat, setShowChat] = useState(false)
+
+  const messagesEndRef = useRef(null)
+
+  // ── Load list ──────────────────────────────────────────────────────────────
+
+  const fetchList = useCallback(async (pg, q) => {
+    if (!firebaseUser) return
+    setListLoading(true)
+    try {
+      const token = await firebaseUser.getIdToken()
+      const data  = await getConversations(token, { page: pg, perPage, search: q || undefined })
+      setConvList(data.conversations)
+      setTotal(data.total)
+    } catch {
+      showToast('Failed to load conversations.')
+    } finally {
+      setListLoading(false)
+    }
+  }, [firebaseUser]) // eslint-disable-line
+
+  useEffect(() => { fetchList(1, '') }, [firebaseUser]) // eslint-disable-line
+
+  // Debounce search
+  useEffect(() => {
+    const t = setTimeout(() => { setPage(1); fetchList(1, search) }, 350)
+    return () => clearTimeout(t)
+  }, [search]) // eslint-disable-line
+
+  // Scroll to bottom when messages load
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  // ── Select conversation ────────────────────────────────────────────────────
+
+  async function handleSelect(conv) {
+    setActiveConv(conv)
+    setMessages([])
+    setShowChat(true)
+    setMsgLoading(true)
+    try {
+      const token = await firebaseUser.getIdToken()
+      const data  = await getConversation(token, conv.id)
+      setMessages(data.messages)
+      // Merge in full details (summary, phone)
+      setActiveConv(prev => ({
+        ...prev,
+        conversation_summary: data.conversation_summary,
+        client_phone:         data.client_phone,
+      }))
+    } catch {
+      showToast('Failed to load messages.')
+    } finally {
+      setMsgLoading(false)
+    }
+  }
+
+  const pages        = Math.max(1, Math.ceil(total / perPage))
+  const messageGroups = groupByDate(messages)
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <Layout>
-      <div className="flex h-[calc(100vh-64px)] bg-background">
+      <Toast toast={toast} onClose={hideToast} />
+      <div className="flex h-[calc(100vh-64px)] bg-slate-50 overflow-hidden">
 
-        {/* ── Chat list ── */}
-        <div className="w-80 shrink-0 flex flex-col border-r border-slate-200 bg-white">
-          <div className="p-4 border-b border-slate-100">
-            <h2 className="text-base font-semibold text-slate-900 mb-3">Active Chats</h2>
+        {/* ── Conversation list panel ── */}
+        <div className={`${showChat ? 'hidden sm:flex' : 'flex'} w-full sm:w-80 shrink-0 flex-col border-r border-slate-200 bg-white`}>
+
+          {/* List header */}
+          <div className="p-4 border-b border-slate-100 shrink-0">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-semibold text-slate-900">Conversations</h2>
+              {!listLoading && (
+                <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full tabular-nums">{total}</span>
+              )}
+            </div>
             <div className="relative">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[18px] pointer-events-none">search</span>
               <input
-                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-600/20 focus:border-indigo-600"
-                placeholder="Search conversations…"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-600/20 focus:border-indigo-600 transition-all"
+                placeholder="Search by client name…"
               />
             </div>
           </div>
 
+          {/* List body */}
           <div className="flex-1 overflow-y-auto">
-            {CHATS.map(chat => (
-              <button
-                key={chat.id}
-                onClick={() => setActiveChat(chat.id)}
-                className={`w-full text-left px-4 py-4 border-b border-slate-50 flex items-start gap-3 transition-colors ${
-                  activeChat === chat.id ? 'bg-indigo-50' : 'hover:bg-slate-50'
-                }`}
-              >
-                <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs shrink-0">
-                  {chat.name.split(' ').map(n => n[0]).join('')}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-semibold text-slate-900 truncate">{chat.name}</span>
-                    <span className="text-[10px] text-slate-400 ml-2 shrink-0">{chat.time}</span>
-                  </div>
-                  <p className="text-xs text-slate-500 truncate mb-2">{chat.last}</p>
-                  <span className={`inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full ${chat.statusColor}`}>
-                    {chat.status}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* ── Chat window ── */}
-        <div className="flex-1 flex flex-col">
-          {/* Chat header */}
-          <div className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">
-                JW
+            {listLoading ? (
+              <div className="flex flex-col items-center justify-center h-40 gap-2">
+                <span className="material-symbols-outlined text-slate-300 text-[32px] animate-spin">hourglass_top</span>
+                <p className="text-xs text-slate-400">Loading…</p>
               </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-900">James Wilson</p>
-                <p className="text-xs text-green-600 font-semibold uppercase tracking-wide">Online</p>
+            ) : convList.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-40 gap-2 px-6 text-center">
+                <span className="material-symbols-outlined text-slate-300 text-[32px]">forum</span>
+                <p className="text-sm text-slate-400">
+                  {search ? 'No results found' : 'No conversations yet'}
+                </p>
               </div>
-            </div>
-            <div className="flex items-center gap-2 text-slate-400">
-              <button className="p-2 hover:bg-slate-50 rounded-lg transition-colors">
-                <span className="material-symbols-outlined text-[20px]">call</span>
-              </button>
-              <button className="p-2 hover:bg-slate-50 rounded-lg transition-colors">
-                <span className="material-symbols-outlined text-[20px]">more_vert</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 bg-slate-50/50">
-            {MESSAGES.map((msg, i) => (
-              <div key={i} className={`flex ${msg.from === 'ai' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[70%] px-4 py-3 rounded-2xl shadow-sm ${
-                    msg.from === 'ai'
-                      ? 'bg-indigo-600 text-white rounded-tr-none'
-                      : 'bg-white text-slate-800 rounded-tl-none border border-slate-200'
+            ) : (
+              convList.map((conv, i) => (
+                <button
+                  key={conv.id}
+                  onClick={() => handleSelect(conv)}
+                  className={`w-full text-left px-4 py-3.5 border-b border-slate-50 flex items-start gap-3 transition-colors ${
+                    activeConv?.id === conv.id
+                      ? 'bg-indigo-50 border-l-[3px] border-l-indigo-500'
+                      : 'hover:bg-slate-50'
                   }`}
                 >
-                  <p className="text-sm leading-relaxed">{msg.text}</p>
-                  <p className={`text-[10px] mt-1 ${msg.from === 'ai' ? 'text-indigo-200 text-right' : 'text-slate-400 text-right'}`}>
-                    {msg.time}
-                  </p>
-                </div>
-              </div>
-            ))}
+                  <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${AVATAR_PALETTE[i % AVATAR_PALETTE.length]}`}>
+                    {initials(conv.client_name)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-sm font-semibold text-slate-900 truncate">{conv.client_name}</span>
+                      <span className="text-[10px] text-slate-400 ml-2 shrink-0">{relativeTime(conv.last_message_time)}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 truncate leading-snug">{conv.last_message || '—'}</p>
+                    <p className="text-[10px] text-slate-300 mt-0.5">{conv.message_count} message{conv.message_count !== 1 ? 's' : ''}</p>
+                  </div>
+                </button>
+              ))
+            )}
           </div>
 
-          {/* Input */}
-          <div className="h-16 bg-white border-t border-slate-200 flex items-center gap-3 px-4">
-            <button className="p-2 text-slate-400 hover:text-slate-600">
-              <span className="material-symbols-outlined text-[20px]">sentiment_satisfied</span>
-            </button>
-            <input
-              type="text"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              placeholder="Type a message…"
-              className="flex-1 py-2 px-4 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-600/20 focus:border-indigo-600"
-            />
-            <button className="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors">
-              <span className="material-symbols-outlined text-[20px]">send</span>
-            </button>
-          </div>
-        </div>
-
-        {/* ── Manager Override ── */}
-        <div className="hidden xl:flex xl:w-80 xl:flex-col bg-white border-l border-slate-200 overflow-y-auto">
-          <div className="p-5 border-b border-slate-100">
-            <h3 className="text-sm font-semibold text-slate-900">Manager Override</h3>
-          </div>
-
-          <div className="p-5 flex flex-col gap-6">
-            {/* Pause AI */}
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-700">Pause AI Agent</p>
-                <p className="text-xs text-slate-400 mt-0.5">Take over conversation manually</p>
-              </div>
-              <button className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-slate-200 transition-colors duration-200 focus:outline-none">
-                <span className="translate-x-0 pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200" />
+          {/* Pagination */}
+          {pages > 1 && (
+            <div className="flex items-center justify-center gap-2 p-3 border-t border-slate-100 shrink-0">
+              <button
+                onClick={() => { const p = Math.max(1, page - 1); setPage(p); fetchList(p, search) }}
+                disabled={page === 1}
+                className="p-1.5 border border-slate-200 rounded-lg bg-white disabled:opacity-40 text-slate-500 hover:bg-slate-50 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">chevron_left</span>
+              </button>
+              <span className="text-xs text-slate-400 tabular-nums">{page} / {pages}</span>
+              <button
+                onClick={() => { const p = Math.min(pages, page + 1); setPage(p); fetchList(p, search) }}
+                disabled={page === pages}
+                className="p-1.5 border border-slate-200 rounded-lg bg-white disabled:opacity-40 text-slate-500 hover:bg-slate-50 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">chevron_right</span>
               </button>
             </div>
+          )}
+        </div>
 
-            {/* Response creativity */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-sm font-medium text-slate-700">Response Creativity</p>
-                <span className="text-xs text-slate-400">65%</span>
+        {/* ── Chat panel ── */}
+        <div className={`${showChat ? 'flex' : 'hidden sm:flex'} flex-1 flex-col min-w-0 overflow-hidden`}>
+
+          {!activeConv ? (
+            /* Empty state */
+            <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-slate-50/80">
+              <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center">
+                <span className="material-symbols-outlined text-slate-300 text-[32px]">forum</span>
               </div>
-              <input type="range" min="0" max="100" defaultValue="65" className="w-full accent-indigo-600" />
+              <p className="text-base font-semibold text-slate-600">Select a conversation</p>
+              <p className="text-sm text-slate-400 text-center w-64">
+                Choose a conversation from the list to view its full message history.
+              </p>
             </div>
-
-            {/* Lead score */}
-            <div className="bg-indigo-50 rounded-2xl p-4 border border-indigo-100">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-indigo-900">Lead Score</span>
-                <span className="text-xl font-bold text-indigo-600">72%</span>
+          ) : (
+            <>
+              {/* Chat header */}
+              <div className="bg-white border-b border-slate-200 px-4 sm:px-6 py-3 flex items-center gap-3 shrink-0">
+                <button
+                  onClick={() => { setShowChat(false); setActiveConv(null) }}
+                  className="sm:hidden p-1.5 -ml-1 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[20px]">arrow_back</span>
+                </button>
+                <div className={`h-9 w-9 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${AVATAR_PALETTE[0]}`}>
+                  {initials(activeConv.client_name)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-900 truncate">{activeConv.client_name}</p>
+                  {activeConv.client_phone && (
+                    <p className="text-xs text-slate-400">{activeConv.client_phone}</p>
+                  )}
+                </div>
+                <div className="shrink-0 flex items-center gap-1 text-xs text-slate-400">
+                  <span className="material-symbols-outlined text-[14px]">chat_bubble_outline</span>
+                  <span className="tabular-nums">{activeConv.message_count}</span>
+                </div>
               </div>
-              <div className="w-full h-2 bg-white rounded-full overflow-hidden">
-                <div className="h-full bg-indigo-600 w-[72%]" />
-              </div>
-              <p className="mt-2 text-xs text-indigo-700">Warm lead — AI recommends follow-up within 24h.</p>
-            </div>
 
-            {/* Session context */}
-            <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Session Context</p>
-              <div className="space-y-2">
-                {[
-                  { label: 'Intent', value: 'Pricing inquiry' },
-                  { label: 'Stage', value: 'Consideration' },
-                  { label: 'Messages', value: '5 exchanged' },
-                ].map(item => (
-                  <div key={item.label} className="flex items-center justify-between py-1">
-                    <span className="text-xs text-slate-500">{item.label}</span>
-                    <span className="text-xs font-medium text-slate-900">{item.value}</span>
+              {/* Summary banner */}
+              {activeConv.conversation_summary && (
+                <div className="bg-amber-50 border-b border-amber-100 px-4 sm:px-6 py-2.5 flex items-start gap-2 shrink-0">
+                  <span className="material-symbols-outlined text-amber-400 text-[16px] mt-0.5 shrink-0">summarize</span>
+                  <p className="text-xs text-amber-800 leading-relaxed">{activeConv.conversation_summary}</p>
+                </div>
+              )}
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 bg-slate-50/60">
+                {msgLoading ? (
+                  <div className="h-full flex items-center justify-center">
+                    <span className="material-symbols-outlined text-slate-300 text-[40px] animate-spin">hourglass_top</span>
                   </div>
-                ))}
+                ) : messageGroups.length === 0 ? (
+                  <div className="h-full flex items-center justify-center">
+                    <p className="text-sm text-slate-400">No messages in this conversation.</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {messageGroups.map((group, gi) => (
+                      <div key={gi}>
+                        {/* Date separator */}
+                        <div className="flex items-center gap-3 my-4">
+                          <div className="flex-1 h-px bg-slate-200" />
+                          <span className="text-[11px] text-slate-400 font-medium whitespace-nowrap px-1">
+                            {fmtDateLabel(group.dateIso)}
+                          </span>
+                          <div className="flex-1 h-px bg-slate-200" />
+                        </div>
+
+                        <div className="flex flex-col gap-1.5">
+                          {group.messages.map((msg, mi) => {
+                            const isAgent = msg.sender_type === 'user'
+                            const prevMsg = mi > 0 ? group.messages[mi - 1] : null
+                            const isSameSender = prevMsg?.sender_type === msg.sender_type
+                            return (
+                              <div key={msg.id} className={`flex ${isAgent ? 'justify-end' : 'justify-start'} ${isSameSender ? 'mt-0.5' : 'mt-3'}`}>
+                                <div className={`max-w-[75%] sm:max-w-[65%] ${isAgent ? 'items-end' : 'items-start'} flex flex-col`}>
+                                  {/* Sender label on first message or after switching sender */}
+                                  {!isSameSender && (
+                                    <p className={`text-[10px] font-semibold mb-1 px-1 ${isAgent ? 'text-right text-indigo-400' : 'text-slate-400'}`}>
+                                      {isAgent ? 'AI Agent' : activeConv.client_name}
+                                    </p>
+                                  )}
+                                  <div
+                                    className={`px-4 py-2.5 shadow-sm ${
+                                      isAgent
+                                        ? 'bg-indigo-600 text-white rounded-2xl rounded-tr-sm'
+                                        : 'bg-white text-slate-800 rounded-2xl rounded-tl-sm border border-slate-200'
+                                    }`}
+                                  >
+                                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+                                    <p className={`text-[10px] mt-1.5 text-right ${isAgent ? 'text-indigo-200' : 'text-slate-400'}`}>
+                                      {fmtTime(msg.created_at)}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={messagesEndRef} />
+                  </div>
+                )}
               </div>
-            </div>
-          </div>
+
+              {/* Read-only footer */}
+              <div className="bg-white border-t border-slate-100 px-4 py-3 flex items-center justify-center gap-2 shrink-0">
+                <span className="material-symbols-outlined text-slate-300 text-[15px]">lock</span>
+                <p className="text-xs text-slate-400">Read-only — conversation handled by the AI agent</p>
+              </div>
+            </>
+          )}
         </div>
 
       </div>

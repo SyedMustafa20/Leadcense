@@ -4,13 +4,27 @@ from datetime import datetime
 
 
 class UserRegisterRequest(BaseModel):
-    id_token: str           # Firebase ID token from the frontend (verified server-side)
+    id_token: str
     name: str
     phone_number: Optional[str] = None
     industry: str
     company_name: str
     company_size: str
     location: str
+    website: Optional[str] = None
+    services: Optional[str] = None
+    description: Optional[str] = None
+
+
+class UpdateUserRequest(BaseModel):
+    name: Optional[str] = None
+
+
+class UpdateCompanyRequest(BaseModel):
+    company_name: Optional[str] = None
+    company_size: Optional[str] = None
+    location: Optional[str] = None
+    website: Optional[str] = None
     services: Optional[str] = None
     description: Optional[str] = None
 
@@ -69,3 +83,5 @@ class RegisterResponse(BaseModel):
     user: UserResponse
     agent_config: AgentConfigResponse
     company_info: companyInfoResponse
+
+    model_config = {"from_attributes": True}

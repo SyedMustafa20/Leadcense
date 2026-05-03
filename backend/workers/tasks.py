@@ -38,7 +38,7 @@ def persist_messages(self, conversation_id: int, user_content: str, agent_conten
 
 
 # ---------------------------------------------------------------------------
-# Task 2: Summarize + extract lead data (runs every N messages)
+# Task 2: Summarize + extract data (periodic); create lead (on conversation close)
 # ---------------------------------------------------------------------------
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=10)
@@ -49,13 +49,18 @@ def process_conversation(
     client_id: int,
     context_json: str,
     agent_system_prompt: str,
+    is_final: bool = False,
 ):
     """
     1. Summarize the conversation so far, store in Redis + Conversation table.
-    2. Extract structured lead fields.
-    3. Find or create the correct Lead row (respecting multi-lead / multi-conv
-       relationships) and link it to this conversation via lead_conversations.
-    4. Write active_lead_id back into the Redis context for future tasks.
+    2. Update qualification state in Redis (q_state) so the agent has fresh context.
+    3. If is_final=True (conversation concluded): extract structured lead data and
+       create/update the Lead row. This is the ONLY path that writes Lead records.
+       If is_final=False (periodic run): stop after step 2 — no lead creation.
+
+    is_final is set True when the agent has confirmed the meeting (meeting_confirmed
+    flag in Redis). Periodic runs keep summary + q_state fresh without creating
+    premature leads.
     """
     try:
         ctx: dict          = json.loads(context_json)
@@ -101,7 +106,10 @@ def process_conversation(
         finally:
             db.close()
 
-        # ── 2. Extract structured lead data ────────────────────────────────
+        # ── 2. Extract structured data + update q_state ───────────────────
+        # Extraction runs on every call so q_state (answered/pending fields)
+        # stays fresh and the agent sees accurate qualification progress.
+        # Lead creation is gated below on is_final only.
         extract_prompt = [
             {
                 "role": "system",
@@ -148,16 +156,18 @@ def process_conversation(
         raw_input = "\n".join(m["content"] for m in messages if m["role"] == "user")
         separate_opportunities: list[str] = extracted.pop("separate_opportunities", [])
 
-        # ── 3. Update qualification state in Redis ─────────────────────────
-        # Mark any pending required fields as answered based on what was extracted.
-        # This is what allows the agent to detect [QUALIFICATION COMPLETE] in real time.
+        # ── 3. Update q_state so the agent sees fresh answered/pending fields ─
         _update_q_state_from_extraction(conversation_id, extracted)
 
-        # ── 4. Resolve lead(s) and link to this conversation ───────────────
+        # ── 4. Lead creation — only when conversation is concluded ─────────
+        if not is_final:
+            log.info("conv=%s periodic run complete (summary + q_state updated)", conversation_id)
+            return
+
+        log.info("conv=%s final run — creating/updating lead", conversation_id)
         db = SessionLocal()
         try:
             if len(separate_opportunities) > 1:
-                # Genuinely separate purchase intents — one lead per opportunity.
                 _upsert_multi_leads(
                     db, user_id, client_id, conversation_id,
                     active_lead_id, extracted, new_summary, raw_input,
@@ -165,7 +175,6 @@ def process_conversation(
                 )
                 lead = _find_active_lead(db, user_id, client_id, active_lead_id)
             else:
-                # Single opportunity (the default for almost every conversation).
                 lead = _resolve_lead(
                     db, user_id, client_id, conversation_id,
                     active_lead_id, extracted, new_summary, raw_input,
@@ -175,6 +184,7 @@ def process_conversation(
 
             if lead:
                 ctx_mgr.update_active_lead(conversation_id, lead.id)
+                log.info("conv=%s lead=%s created/updated", conversation_id, lead.id)
 
         finally:
             db.close()
@@ -273,16 +283,32 @@ def _resolve_lead(
     extracted: dict,
     summary: str,
     raw_input: str,
-) -> Lead:
+) -> Lead | None:
     """
     Single-interest path.
 
-    - Returning client (new conversation, same ongoing requirement):
-        → finds the existing open lead and links the new conversation to it.
-    - Fresh client or closed lead:
-        → creates a new Lead row.
-    - Always ensures the LeadConversation link exists.
+    Only creates/updates a lead when the conversation is sufficiently complete:
+    - Must have a requirement (what the client wants)
+    - Must have contact info (email OR phone_number) so the lead is actionable
+
+    This prevents premature lead creation from early-conversation extractions
+    where the client has described a need but not yet provided their details.
+
+    If an existing lead is already linked (active_lead_id), it is always updated
+    regardless of completeness — we never discard an already-created lead.
     """
+    has_requirement = bool(extracted.get("requirement"))
+    has_contact = bool(extracted.get("email") or extracted.get("phone_number"))
+    has_existing = bool(active_lead_id)
+
+    # Only create a brand-new lead when the conversation is complete enough
+    if not has_existing and not (has_requirement and has_contact):
+        log.info(
+            "conv=%s skipping lead creation — requirement=%s contact=%s",
+            conversation_id, has_requirement, has_contact,
+        )
+        return None
+
     lead = _find_active_lead(db, user_id, client_id, active_lead_id)
 
     if not lead:
@@ -293,7 +319,7 @@ def _resolve_lead(
             source="whatsapp",
         )
         db.add(lead)
-        db.flush()  # get lead.id
+        db.flush()
 
     _apply_extracted(lead, extracted, summary, raw_input)
     _ensure_link(db, lead.id, conversation_id)

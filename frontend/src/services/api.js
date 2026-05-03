@@ -120,3 +120,47 @@ export async function deleteUser(idToken) {
     headers: { Authorization: `Bearer ${idToken}` },
   })
 }
+
+export async function updateUser(idToken, { name }) {
+  return request('/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function updateCompany(idToken, payload) {
+  return request('/users/company/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getAgentConfig(idToken) {
+  return request('/agents/config', {
+    headers: { Authorization: `Bearer ${idToken}` },
+  })
+}
+
+export async function updateAgentConfig(idToken, payload) {
+  return request('/agents/config', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getConversations(idToken, { page = 1, perPage = 30, search } = {}) {
+  const params = new URLSearchParams({ page, per_page: perPage })
+  if (search) params.set('search', search)
+  return request(`/conversations?${params}`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  })
+}
+
+export async function getConversation(idToken, conversationId) {
+  return request(`/conversations/${conversationId}`, {
+    headers: { Authorization: `Bearer ${idToken}` },
+  })
+}

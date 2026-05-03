@@ -7,9 +7,10 @@ from services.redis_client import get_redis
 load_dotenv()
 
 # Redis key templates
-_CTX_KEY       = "ctx:{conv_id}"          # full conversation context
-_CONV_MAP_KEY  = "conv_map:{uid}:{phone}"  # phone → {conversation_id, client_id, last_activity_ts}
-_AGENT_CFG_KEY = "agent_cfg:{uid}"         # cached agent config
+_CTX_KEY        = "ctx:{conv_id}"          # full conversation context
+_CONV_MAP_KEY   = "conv_map:{uid}:{phone}"  # phone → {conversation_id, client_id, last_activity_ts}
+_AGENT_CFG_KEY  = "agent_cfg:{uid}"         # cached agent config
+_COMPANY_KEY    = "company_info:{uid}"      # cached company info
 
 # Sliding window: keep this many recent messages in Redis
 _MAX_MESSAGES = 10
@@ -80,6 +81,28 @@ def cache_agent_config(user_id: int, config_dict: dict) -> None:
     r.setex(_AGENT_CFG_KEY.format(uid=user_id), _CFG_TTL, json.dumps(config_dict))
 
 
+def invalidate_agent_config(user_id: int) -> None:
+    get_redis().delete(_AGENT_CFG_KEY.format(uid=user_id))
+
+
+# ---------------------------------------------------------------------------
+# Company info cache
+# ---------------------------------------------------------------------------
+
+def get_cached_company_info(user_id: int) -> dict | None:
+    r = get_redis()
+    raw = r.get(_COMPANY_KEY.format(uid=user_id))
+    return json.loads(raw) if raw else None
+
+
+def cache_company_info(user_id: int, company_dict: dict) -> None:
+    get_redis().setex(_COMPANY_KEY.format(uid=user_id), _CFG_TTL, json.dumps(company_dict))
+
+
+def invalidate_company_cache(user_id: int) -> None:
+    get_redis().delete(_COMPANY_KEY.format(uid=user_id))
+
+
 # ---------------------------------------------------------------------------
 # Conversation context
 # ---------------------------------------------------------------------------
@@ -106,9 +129,22 @@ def init_context(conversation_id: int, client_id: int) -> dict:
         "client_id": client_id,
         "conversation_id": conversation_id,
         "active_lead_id": None,     # set by background task once a Lead row is created/found
+        "meeting_confirmed": False, # True once the agent has sent the meeting/calendar confirmation
     }
     _save_context(conversation_id, ctx)
     return ctx
+
+
+def set_meeting_confirmed(conversation_id: int) -> None:
+    """Mark the conversation as concluded — agent has confirmed the meeting."""
+    r = get_redis()
+    raw = r.get(_CTX_KEY.format(conv_id=conversation_id))
+    if not raw:
+        return
+    ctx = json.loads(raw)
+    ctx["meeting_confirmed"] = True
+    ctx["phase"] = "closed"
+    _save_context(conversation_id, ctx)
 
 
 def update_active_lead(conversation_id: int, lead_id: int) -> None:

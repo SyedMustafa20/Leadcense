@@ -39,6 +39,7 @@ export default function Onboarding() {
   const [companyName, setCompanyName]   = useState('')
   const [companySize, setCompanySize]   = useState('')
   const [location, setLocation]         = useState('')
+  const [website, setWebsite]           = useState('')
   const [services, setServices]         = useState('')
   const [description, setDescription]   = useState('')
   const [touched3, setTouched3]         = useState({})
@@ -107,6 +108,7 @@ export default function Onboarding() {
         companyName: companyName.trim(),
         companySize,
         location: location.trim(),
+        website: website || null,
         services: services || null,
         description: description || null,
       })
@@ -325,6 +327,19 @@ export default function Onboarding() {
                           className={fieldCls(fieldErr3('location'))}
                         />
                         <FieldError msg={fieldErr3('location')} />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                          Website <span className="text-slate-400 font-normal">(optional)</span>
+                        </label>
+                        <input
+                          type="url"
+                          value={website}
+                          onChange={e => setWebsite(e.target.value)}
+                          placeholder="https://yourcompany.com"
+                          className={fieldCls(false)}
+                        />
                       </div>
 
                       <div>

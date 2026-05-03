@@ -235,29 +235,29 @@ export default function Leads() {
 
             {/* Table */}
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-100">
+              <table className="w-full divide-y divide-slate-100">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Client</th>
-                    <th className="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Requirement</th>
-                    <th className="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Tag</th>
-                    <th className="px-6 py-3.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Score</th>
-                    <th className="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Created</th>
-                    <th className="px-6 py-3.5" />
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Client</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Requirement</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Tag</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Score</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Created</th>
+                    <th className="px-4 py-3" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {loading && leads.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-16 text-center">
+                      <td colSpan={7} className="px-4 py-16 text-center">
                         <span className="material-symbols-outlined text-slate-300 text-[40px] block mb-2 animate-spin">hourglass_top</span>
                         <p className="text-sm text-slate-400">Loading leads…</p>
                       </td>
                     </tr>
                   ) : leads.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-16 text-center">
+                      <td colSpan={7} className="px-4 py-16 text-center">
                         <span className="material-symbols-outlined text-slate-300 text-[40px] block mb-2">group</span>
                         <p className="text-sm font-medium text-slate-500">No leads yet</p>
                         <p className="text-xs text-slate-400 mt-1">Leads are generated automatically from your Playground and WhatsApp conversations.</p>
@@ -268,23 +268,23 @@ export default function Leads() {
                     return (
                       <tr key={lead.id} className="hover:bg-slate-50/60 transition-colors">
                         {/* Client */}
-                        <td className="whitespace-nowrap px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className={`h-9 w-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${AVATAR_PALETTE[i % AVATAR_PALETTE.length]}`}>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${AVATAR_PALETTE[i % AVATAR_PALETTE.length]}`}>
                               {initials(lead.name)}
                             </div>
-                            <div>
-                              <p className="text-sm font-medium text-slate-900">{lead.name || 'Unknown'}</p>
-                              {lead.email && <p className="text-xs text-slate-400">{lead.email}</p>}
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-slate-900 truncate max-w-[120px]">{lead.name || 'Unknown'}</p>
+                              {lead.email && <p className="text-xs text-slate-400 truncate max-w-[120px]">{lead.email}</p>}
                             </div>
                           </div>
                         </td>
                         {/* Requirement */}
-                        <td className="px-6 py-4 max-w-xs">
+                        <td className="px-4 py-3 max-w-[200px]">
                           <p className="text-sm text-slate-600 line-clamp-2">{lead.requirement || '—'}</p>
                         </td>
                         {/* Status (user-editable) */}
-                        <td className="whitespace-nowrap px-6 py-4">
+                        <td className="px-4 py-3">
                           <StatusSelect
                             leadId={lead.id}
                             value={lead.status}
@@ -292,9 +292,9 @@ export default function Leads() {
                           />
                         </td>
                         {/* AI Tag */}
-                        <td className="whitespace-nowrap px-6 py-4">
+                        <td className="px-4 py-3">
                           {tagCfg ? (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 whitespace-nowrap">
                               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: tagCfg.dot }} />
                               {tagCfg.label}
                             </span>
@@ -303,11 +303,11 @@ export default function Leads() {
                           )}
                         </td>
                         {/* Score */}
-                        <td className="whitespace-nowrap px-6 py-4 text-right">
+                        <td className="px-4 py-3 text-right">
                           {lead.score != null ? (
-                            <div className="flex items-center justify-end gap-2">
-                              <span className="text-sm text-slate-700 tabular-nums">{lead.score}/100</span>
-                              <div className="w-14 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <span className="text-sm text-slate-700 tabular-nums whitespace-nowrap">{lead.score}/100</span>
+                              <div className="w-10 h-1.5 bg-slate-100 rounded-full overflow-hidden shrink-0">
                                 <div className="h-full rounded-full" style={{ width: `${lead.score}%`, background: SCORE_COLOR(lead.score) }} />
                               </div>
                             </div>
@@ -316,12 +316,12 @@ export default function Leads() {
                           )}
                         </td>
                         {/* Date */}
-                        <td className="whitespace-nowrap px-6 py-4 text-sm text-slate-400">{fmtDate(lead.created_at)}</td>
+                        <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">{fmtDate(lead.created_at)}</td>
                         {/* View */}
-                        <td className="whitespace-nowrap px-6 py-4 text-right">
+                        <td className="px-4 py-3 text-right">
                           <button
                             onClick={() => navigate(`/leads/${lead.id}`)}
-                            className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition-colors"
+                            className="inline-flex items-center gap-0.5 text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition-colors whitespace-nowrap"
                           >
                             View
                             <span className="material-symbols-outlined text-[16px]">chevron_right</span>

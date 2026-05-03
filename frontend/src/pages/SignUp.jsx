@@ -133,25 +133,36 @@ export default function SignUp() {
     setTouched(t => ({ ...t, companyName: true, companySize: true, location: true }))
     if (Object.keys(s3Errors).length) return
     setBusy(true)
+    let firebaseCred = null
     try {
-      const cred  = await signUpWithEmail(email, password)
-      const token = await cred.user.getIdToken()
-      const data  = await registerUser(token, {
-        name: name.trim(),
+      firebaseCred    = await signUpWithEmail(email, password)
+      const token     = await firebaseCred.user.getIdToken()
+      const data      = await registerUser(token, {
+        name:        name.trim(),
         phoneNumber: phone || null,
         industry,
         companyName: companyName.trim(),
         companySize,
-        location: location.trim(),
-        website: website || null,
-        services: services || null,
+        location:    location.trim(),
+        website:     website || null,
+        services:    services || null,
         description: description || null,
       })
       setDbUser(data)
       navigate('/dashboard', { replace: true })
     } catch (err) {
       console.error('[Email signup error]', err)
-      showToast(getAuthError(err))
+      // If Firebase created the account but the backend call failed,
+      // delete the Firebase user so the email isn't orphaned.
+      if (firebaseCred) {
+        await firebaseCred.user.delete().catch(() => null)
+      }
+      const isBackendFailure = !err.code && (err.message === 'Failed to fetch' || err.message?.includes('timed out'))
+      showToast(
+        isBackendFailure
+          ? 'Could not reach the server. Make sure the backend is running and try again.'
+          : getAuthError(err)
+      )
     } finally {
       setBusy(false)
     }
