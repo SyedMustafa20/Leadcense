@@ -7,6 +7,10 @@ from api.playground import router as playground_router
 from api.leads import router as leads_router
 from api.agents import router as agents_router
 from api.conversations import router as conversations_router
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 app = FastAPI(title="WhatsApp Lead Qualifier")
 
@@ -16,6 +20,7 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:5174",
         "http://localhost:3000",
+        os.getenv("FRONTEND_URL", "http://localhost:3000"),
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -31,6 +36,6 @@ app.include_router(agents_router)
 app.include_router(conversations_router)
 
 
-@app.get("/")
+@app.get("/health")
 def read_root():
     return {"status": "ok"}

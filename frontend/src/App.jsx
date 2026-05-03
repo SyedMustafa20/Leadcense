@@ -1,4 +1,6 @@
 import { Routes, Route } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useAuth } from './context/AuthContext'
 import ProtectedRoute  from './components/ProtectedRoute'
 import OnboardingRoute from './components/OnboardingRoute'
 import Landing         from './pages/Landing'
@@ -13,7 +15,34 @@ import Conversations   from './pages/Conversations'
 import Agents          from './pages/Agents'
 import Settings        from './pages/Settings'
 
+function PageLoader() {
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
+      justifyContent: 'center', background: '#f8f9ff', zIndex: 9999,
+    }}>
+      <div style={{
+        width: '40px', height: '40px',
+        border: '3px solid #e0e7ff',
+        borderTopColor: '#4f46e5',
+        borderRadius: '50%',
+        animation: 'spin 0.7s linear infinite',
+      }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  )
+}
+
 export default function App() {
+  const { loading: authLoading } = useAuth()
+  const [fontsReady, setFontsReady] = useState(false)
+
+  useEffect(() => {
+    document.fonts.ready.then(() => setFontsReady(true))
+  }, [])
+
+  if (authLoading || !fontsReady) return <PageLoader />
+
   return (
     <Routes>
       <Route path="/"            element={<Landing />} />
